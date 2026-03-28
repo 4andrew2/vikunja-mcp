@@ -112,7 +112,7 @@ export async function bulkUpdateTasks(args: BulkUpdateArgs): Promise<{ content: 
       if (Array.isArray(result) && result.length > 0) {
         const isValid = result.every(t => t && typeof t === 'object' && 'project_id' in t && 'title' in t);
         let hasValue = true;
-        if (args.field && ['priority', 'done', 'due_date', 'project_id'].includes(args.field)) {
+        if (args.field && ['priority', 'done', 'due_date', 'project_id', 'bucket_id'].includes(args.field)) {
           hasValue = result.every(t => t[args.field as keyof Task] === args.value);
         }
         if (isValid && hasValue) {

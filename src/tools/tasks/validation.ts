@@ -120,6 +120,9 @@ export function applyFieldUpdate(task: Task, field: string | undefined, value: u
     case 'repeat_mode':
       (task as Record<string, unknown>).repeat_mode = value;
       break;
+    case 'bucket_id':
+      (task as Record<string, unknown>).bucket_id = value as number;
+      break;
     case 'assignees':
     case 'labels':
       // These are handled separately with special API calls

@@ -79,7 +79,7 @@ export const bulkOperationValidator = {
     }
 
     // Handle numeric fields that come as strings
-    if (args.field && ['priority', 'project_id', 'repeat_after'].includes(args.field) && typeof args.value === 'string') {
+    if (args.field && ['priority', 'project_id', 'repeat_after', 'bucket_id'].includes(args.field) && typeof args.value === 'string') {
       const numValue = Number(args.value);
       if (!isNaN(numValue)) {
         args.value = numValue;
@@ -100,6 +100,7 @@ export const bulkOperationValidator = {
       'labels',
       'repeat_after',
       'repeat_mode',
+      'bucket_id',
     ];
 
     if (!args.field || !allowedFields.includes(args.field)) {
@@ -122,6 +123,10 @@ export const bulkOperationValidator = {
 
     if (args.field === 'project_id' && typeof args.value === 'number') {
       validateId(args.value, 'project_id');
+    }
+
+    if (args.field === 'bucket_id' && typeof args.value === 'number') {
+      validateId(args.value, 'bucket_id');
     }
 
     if (['assignees', 'labels'].includes(args.field)) {

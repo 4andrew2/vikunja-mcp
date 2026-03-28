@@ -33,6 +33,7 @@ import { registerTemplatesTool } from './templates';
 import { registerWebhooksTool } from './webhooks';
 import { registerBatchImportTool } from './batch-import';
 import { registerExportTool } from './export';
+import { registerBucketsTool } from './buckets';
 
 // Re-export for testing
 export {
@@ -54,6 +55,7 @@ export {
   registerWebhooksTool,
   registerBatchImportTool,
   registerExportTool,
+  registerBucketsTool,
 };
 
 export function registerTools(
@@ -79,6 +81,7 @@ export function registerTools(
 
   // Only register tools that require clientFactory if it's available
   if (clientFactory) {
+    registerBucketsTool(server, authManager, clientFactory);
     registerProjectsTool(server, authManager, clientFactory);
     registerLabelsTool(server, authManager, clientFactory);
     registerTeamsTool(server, authManager, clientFactory);

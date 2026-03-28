@@ -114,6 +114,7 @@ export function registerTaskCrudTool(
       // Recurring task fields
       repeatAfter: z.number().min(0).optional(),
       repeatMode: z.enum(['day', 'week', 'month', 'year']).optional(),
+      bucketId: z.number().optional(),
       // Query fields
       id: z.number().optional(),
       filter: z.string().optional(),

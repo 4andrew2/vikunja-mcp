@@ -1,6 +1,10 @@
 /**
  * Task Update Service
  * Handles task updates with field diffing and relationship management
+ *
+ * Note: Moving tasks between Kanban buckets requires the dedicated endpoint
+ * POST /projects/{projectId}/views/{viewId}/buckets/{bucketId}/tasks
+ * The regular task update does NOT support bucket_id for bucket moves.
  */
 
 import { MCPError, ErrorCode } from '../../../types';
@@ -25,6 +29,8 @@ export interface UpdateTaskArgs {
   assignees?: number[];
   repeatAfter?: number;
   repeatMode?: 'day' | 'week' | 'month' | 'year';
+  /** Kanban bucket ID to move the task to (e.g. "To Do", "Doing", "Review", "Done") */
+  bucketId?: number;
   // Session ID for AORP response tracking
   sessionId?: string;
 }
@@ -55,11 +61,17 @@ export async function updateTask(args: UpdateTaskArgs): Promise<{ content: Array
 
     const client = await getClientFromContext();
 
+    // Move to bucket first if requested (uses dedicated endpoint; task update with bucket_id does not work)
+    if (args.bucketId !== undefined) {
+      await moveTaskToBucket(client, args.id, args.bucketId);
+    }
+
     // Analyze current state and track changes
     const updateState = await analyzeUpdateState(client, args.id, args);
 
-    // Build and apply the update
-    const updateData = buildUpdateData(updateState.currentTask, args);
+    // Build and apply the update (bucketId handled above via dedicated endpoint; not sent in task update)
+    const { bucketId: _b, ...argsForUpdate } = args;
+    const updateData = buildUpdateData(updateState.currentTask, argsForUpdate);
     await client.tasks.updateTask(args.id, updateData);
 
     // Update labels if provided
@@ -137,6 +149,8 @@ async function analyzeUpdateState(client: VikunjaClient, taskId: number, args: U
   if (currentTask.done !== undefined) previousState.done = currentTask.done;
   if (currentTask.repeat_after !== undefined) previousState.repeat_after = currentTask.repeat_after;
   if (currentTask.repeat_mode !== undefined) previousState.repeat_mode = currentTask.repeat_mode;
+  const bucketId = (currentTask as { bucket_id?: number }).bucket_id;
+  if (bucketId !== undefined) previousState.bucket_id = bucketId;
 
   // Track which fields are being updated
   const affectedFields: string[] = [];
@@ -150,6 +164,7 @@ async function analyzeUpdateState(client: VikunjaClient, taskId: number, args: U
   if (args.repeatMode !== undefined && args.repeatMode !== currentTask.repeat_mode) affectedFields.push('repeatMode');
   if (args.labels !== undefined) affectedFields.push('labels');
   if (args.assignees !== undefined) affectedFields.push('assignees');
+  if (args.bucketId !== undefined) affectedFields.push('bucketId');
 
   return {
     currentTask,
@@ -188,6 +203,32 @@ function buildUpdateData(currentTask: Task, args: UpdateTaskArgs): Task {
   };
 
   return updateData;
+}
+
+/**
+ * Moves a task to a Kanban bucket using the dedicated endpoint.
+ * POST /projects/{projectId}/views/{viewId}/buckets/{bucketId}/tasks
+ * Body: { task_id }
+ */
+async function moveTaskToBucket(client: VikunjaClient, taskId: number, bucketId: number): Promise<void> {
+  const task = await client.tasks.getTask(taskId);
+  const projectId = task.project_id;
+  if (!projectId) {
+    throw new MCPError(ErrorCode.VALIDATION_ERROR, 'Task has no project_id; cannot move to bucket');
+  }
+
+  const projectsService = client.projects as unknown as { request: (endpoint: string, method: string, body?: unknown) => Promise<unknown> };
+  const views = await projectsService.request(`/projects/${projectId}/views`, 'GET') as Array<{ id: number; view_kind?: string }>;
+  const kanbanView = views.find((v) => v.view_kind === 'kanban' || v.view_kind === 'board');
+  if (!kanbanView?.id) {
+    throw new MCPError(ErrorCode.VALIDATION_ERROR, `Project ${projectId} has no Kanban view`);
+  }
+
+  await projectsService.request(
+    `/projects/${projectId}/views/${kanbanView.id}/buckets/${bucketId}/tasks`,
+    'POST',
+    { task_id: taskId }
+  );
 }
 
 /**
