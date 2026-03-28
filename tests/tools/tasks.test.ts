@@ -17,9 +17,11 @@ import type { MockVikunjaClient, MockAuthManager, MockServer } from '../types/mo
 
 // Import the function we're mocking
 import { getClientFromContext } from '../../src/client';
+import { stripTaskRelationFieldsForUpdate } from '../../src/tools/tasks/label-assignment';
+import { circuitBreakerRegistry } from '../../src/utils/retry';
 
 // Import AORP test helpers
-import { extractTasksData, extractTaskData, expectAorpSuccess, expectAorpError, getAorpData, getAorpMetadata } from '../utils/aorp-test-helpers';
+import { extractTasksData } from '../utils/aorp-test-helpers';
 import { parseMarkdown } from '../utils/markdown';
 
 // Mock the modules
@@ -106,7 +108,8 @@ describe('Tasks Tool', () => {
     reactions: {},
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await circuitBreakerRegistry.resetAll();
     jest.clearAllMocks();
 
     // Setup mock client
@@ -121,7 +124,8 @@ describe('Tasks Tool', () => {
         deleteTask: jest.fn(),
         getTaskComments: jest.fn(),
         createTaskComment: jest.fn(),
-        updateTaskLabels: jest.fn(),
+        addLabelToTask: jest.fn(),
+        removeLabelFromTask: jest.fn(),
         bulkAssignUsersToTask: jest.fn(),
         removeUserFromTask: jest.fn(),
         bulkUpdateTasks: jest.fn(),
@@ -156,6 +160,9 @@ describe('Tasks Tool', () => {
         getShareAuth: jest.fn(),
       },
     } as MockVikunjaClient;
+
+    mockClient.tasks.addLabelToTask.mockResolvedValue({ task_id: 1, label_id: 1 } as any);
+    mockClient.tasks.removeLabelFromTask.mockResolvedValue({} as any);
 
     // Setup mock auth manager
     mockAuthManager = createMockTestableAuthManager();
@@ -380,8 +387,18 @@ describe('Tasks Tool', () => {
       };
 
       mockClient.tasks.createTask.mockResolvedValue({ ...mockTask, id: 1 });
-      mockClient.tasks.getTask.mockResolvedValue({ ...mockTask, ...fullTask });
-      mockClient.tasks.updateTaskLabels.mockResolvedValue(undefined);
+      mockClient.tasks.getTask.mockResolvedValue({
+        ...mockTask,
+        ...fullTask,
+        labels: [
+          { id: 1, title: 'Label 1' },
+          { id: 2, title: 'Label 2' },
+        ],
+        assignees: [
+          { id: 1, username: 'u1' },
+          { id: 2, username: 'u2' },
+        ],
+      });
       mockClient.tasks.bulkAssignUsersToTask.mockResolvedValue(undefined);
 
       await callTool('create', fullTask);
@@ -443,7 +460,7 @@ describe('Tasks Tool', () => {
 
     it('should rollback task creation when label assignment fails', async () => {
       mockClient.tasks.createTask.mockResolvedValue({ ...mockTask, id: 1 });
-      mockClient.tasks.updateTaskLabels.mockRejectedValue(new Error('Label assignment failed'));
+      mockClient.tasks.addLabelToTask.mockRejectedValue(new Error('Label assignment failed'));
       mockClient.tasks.deleteTask.mockResolvedValue(undefined);
 
       await expect(
@@ -452,9 +469,7 @@ describe('Tasks Tool', () => {
           projectId: 1,
           labels: [1, 2],
         }),
-      ).rejects.toThrow(
-        "Circuit breaker"
-      );
+      ).rejects.toThrow('Failed to complete task creation');
 
       expect(mockClient.tasks.deleteTask).toHaveBeenCalledWith(1);
     });
@@ -464,7 +479,6 @@ describe('Tasks Tool', () => {
       const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
       mockClient.tasks.createTask.mockResolvedValue({ ...mockTask, id: 1 });
-      mockClient.tasks.updateTaskLabels.mockResolvedValue(undefined);
       mockClient.tasks.bulkAssignUsersToTask.mockRejectedValue(
         new Error('Assignee assignment failed'),
       );
@@ -477,9 +491,7 @@ describe('Tasks Tool', () => {
           labels: [1],
           assignees: [1, 2],
         }),
-      ).rejects.toThrow(
-        "Circuit breaker"
-      );
+      ).rejects.toThrow('Failed to complete task creation');
 
       expect(mockClient.tasks.deleteTask).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -514,7 +526,7 @@ describe('Tasks Tool', () => {
 
     it('should handle non-Error failures during label assignment', async () => {
       mockClient.tasks.createTask.mockResolvedValue({ ...mockTask, id: 1 });
-      mockClient.tasks.updateTaskLabels.mockRejectedValue('Label update failed');
+      mockClient.tasks.addLabelToTask.mockRejectedValue('Label update failed');
       mockClient.tasks.deleteTask.mockResolvedValue(undefined);
 
       await expect(
@@ -523,9 +535,7 @@ describe('Tasks Tool', () => {
           projectId: 1,
           labels: [1, 2],
         }),
-      ).rejects.toThrow(
-        "Circuit breaker"
-      );
+      ).rejects.toThrow('Failed to complete task creation');
 
       expect(mockClient.tasks.deleteTask).toHaveBeenCalledWith(1);
     });
@@ -692,7 +702,7 @@ describe('Tasks Tool', () => {
       });
 
       expect(mockClient.tasks.updateTask).toHaveBeenCalledWith(1, {
-        ...mockTask,
+        ...stripTaskRelationFieldsForUpdate(mockTask as Task),
         title: 'Updated Title',
       });
 
@@ -725,7 +735,7 @@ describe('Tasks Tool', () => {
       });
 
       expect(mockClient.tasks.updateTask).toHaveBeenCalledWith(1, {
-        ...mockTask,
+        ...stripTaskRelationFieldsForUpdate(mockTask as Task),
         title: 'Updated Title',
         description: 'Updated Description',
         due_date: '2025-01-01T00:00:00Z',
@@ -812,9 +822,9 @@ describe('Tasks Tool', () => {
         done: true,
       });
 
-      // Should send the complete task object, not just the done field
+      // Should send scalar task fields (relations stripped); not just the done field
       expect(mockClient.tasks.updateTask).toHaveBeenCalledWith(1, {
-        ...taskWithDetails,
+        ...stripTaskRelationFieldsForUpdate(taskWithDetails as Task),
         done: true,
       });
 
@@ -825,36 +835,58 @@ describe('Tasks Tool', () => {
     });
 
     it('should handle label updates', async () => {
-      const taskWithLabels = {
+      const taskAfterLabelUpdate = {
         ...mockTask,
         labels: [
-          {
-            id: 1,
-            title: 'Label 1',
-            description: '',
-            hexColor: '#FF0000',
-            createdById: 1,
-            projectId: 1,
-            created: '',
-            updated: '',
-          },
+          { id: 1, title: 'Label 1' },
+          { id: 2, title: 'Label 2' },
         ],
       };
 
       mockClient.tasks.getTask
         .mockResolvedValueOnce(mockTask)
-        .mockResolvedValueOnce(taskWithLabels);
-      mockClient.tasks.updateTask.mockResolvedValue(taskWithLabels);
+        .mockResolvedValueOnce(mockTask)
+        .mockResolvedValueOnce(mockTask)
+        .mockResolvedValueOnce(taskAfterLabelUpdate)
+        .mockResolvedValueOnce(taskAfterLabelUpdate);
+      mockClient.tasks.updateTask.mockResolvedValue(mockTask);
 
       await callTool('update', {
         id: 1,
         labels: [1, 2],
       });
 
-      // Labels are updated via updateTaskLabels
-      expect(mockClient.tasks.updateTaskLabels).toHaveBeenCalledWith(1, {
-        label_ids: [1, 2],
+      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(1, { task_id: 1, label_id: 1 });
+      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(1, { task_id: 1, label_id: 2 });
+    });
+
+    it('should merge label ids on update with existing task labels', async () => {
+      const taskWithLabel3 = {
+        ...mockTask,
+        labels: [{ id: 3, title: 'Existing' }],
+      };
+      const taskAfter = {
+        ...mockTask,
+        labels: [
+          { id: 3, title: 'Existing' },
+          { id: 1, title: 'Added' },
+        ],
+      };
+
+      mockClient.tasks.getTask
+        .mockResolvedValueOnce(taskWithLabel3)
+        .mockResolvedValueOnce(taskWithLabel3)
+        .mockResolvedValueOnce(taskWithLabel3)
+        .mockResolvedValueOnce(taskAfter)
+        .mockResolvedValueOnce(taskAfter);
+      mockClient.tasks.updateTask.mockResolvedValue(taskWithLabel3);
+
+      await callTool('update', {
+        id: 1,
+        labels: [1],
       });
+
+      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(1, { task_id: 1, label_id: 1 });
     });
 
     it('should handle assignee removal failures during update', async () => {
@@ -1020,7 +1052,7 @@ describe('Tasks Tool', () => {
     it('should handle non-Error API errors in delete', async () => {
       mockClient.tasks.deleteTask.mockRejectedValue(500);
 
-      await expect(callTool('delete', { id: 1 })).rejects.toThrow('Failed to delete task: 500');
+      await expect(callTool('delete', { id: 1 })).rejects.toThrow('Failed to delete task: Unknown error');
     });
 
     it('should validate task ID', async () => {
@@ -1406,6 +1438,7 @@ describe('Tasks Tool', () => {
       const aorpStatus = parsed.getAorpStatus();
       expect(aorpStatus.type).toBe('success');
       expect(markdown).toContain('list-tasks');
+      const tasksData = extractTasksData(markdown);
       expect(tasksData.tasks).toEqual([]);
     });
 
@@ -1424,7 +1457,7 @@ describe('Tasks Tool', () => {
 
       const markdown = result.content[0].text;
       const parsed = parseMarkdown(markdown);
-      expect(response).toBeDefined();
+      expect(result).toBeDefined();
       const aorpStatus = parsed.getAorpStatus();
       expect(aorpStatus.type).toBe('success');
     });
@@ -1442,7 +1475,7 @@ describe('Tasks Tool', () => {
       );
       mockClient.tasks.removeUserFromTask = jest.fn().mockResolvedValue({});
       mockClient.tasks.bulkAssignUsersToTask = jest.fn().mockResolvedValue({});
-      mockClient.tasks.updateTaskLabels = jest.fn().mockResolvedValue({});
+      mockClient.tasks.addLabelToTask = jest.fn().mockResolvedValue({});
     });
 
     it('should bulk update multiple tasks', async () => {
@@ -1480,6 +1513,7 @@ describe('Tasks Tool', () => {
       expect(aorpStatus.type).toBe('success');
       expect(markdown).toContain('update-task');
       expect(markdown).toContain('Successfully updated 3 tasks');
+      const tasksData = extractTasksData(markdown);
       expect(tasksData.tasks).toHaveLength(3);
     });
 
@@ -1669,7 +1703,7 @@ describe('Tasks Tool', () => {
         field: 'done',
         value: true, // Should be converted to boolean
       });
-      expect(result.content[0].text).toContain('"success": true');
+      expect(result.content[0].text).toContain('**success:** true');
     });
 
     it('should handle string numeric values in bulk update', async () => {
@@ -1694,7 +1728,7 @@ describe('Tasks Tool', () => {
         field: 'priority',
         value: 5, // Should be converted to number
       });
-      expect(result.content[0].text).toContain('"success": true');
+      expect(result.content[0].text).toContain('**success:** true');
     });
 
     it('should handle bulk update API returning Message object instead of Task array', async () => {
@@ -1727,6 +1761,7 @@ describe('Tasks Tool', () => {
       const parsed = parseMarkdown(markdown);
       const aorpStatus = parsed.getAorpStatus();
       expect(aorpStatus.type).toBe('success');
+      const tasksData = extractTasksData(markdown);
       expect(tasksData.tasks).toHaveLength(2);
       expect(tasksData.tasks[0].priority).toBe(5);
       expect(tasksData.tasks[1].priority).toBe(5);
@@ -1778,6 +1813,7 @@ describe('Tasks Tool', () => {
       const parsed = parseMarkdown(markdown);
       const aorpStatus = parsed.getAorpStatus();
       expect(aorpStatus.type).toBe('success');
+      const tasksData = extractTasksData(markdown);
       expect(tasksData.tasks).toHaveLength(2);
       
       // Verify that the returned tasks now show the UPDATED priority values
@@ -1815,6 +1851,7 @@ describe('Tasks Tool', () => {
       expect(mockClient.tasks.updateTask).toHaveBeenCalledTimes(2);
       const markdown = result.content[0].text;
       const parsed = parseMarkdown(markdown);
+      const tasksData = extractTasksData(markdown);
       expect(tasksData.tasks.every(t => t.done === true)).toBe(true);
     });
 
@@ -1846,6 +1883,7 @@ describe('Tasks Tool', () => {
       expect(mockClient.tasks.updateTask).toHaveBeenCalledTimes(2);
       const markdown = result.content[0].text;
       const parsed = parseMarkdown(markdown);
+      const tasksData = extractTasksData(markdown);
       expect(tasksData.tasks.every(t => t.due_date === newDueDate)).toBe(true);
     });
 
@@ -1876,6 +1914,7 @@ describe('Tasks Tool', () => {
       expect(mockClient.tasks.updateTask).toHaveBeenCalledTimes(2);
       const markdown = result.content[0].text;
       const parsed = parseMarkdown(markdown);
+      const tasksData = extractTasksData(markdown);
       expect(tasksData.tasks.every(t => t.project_id === 5)).toBe(true);
     });
 
@@ -2031,7 +2070,9 @@ describe('Tasks Tool', () => {
         .mockResolvedValueOnce({ ...mockTask, id: 2 })
         .mockResolvedValueOnce({ ...mockTask, id: 3 });
 
-      mockClient.tasks.updateTask.mockResolvedValue({ ...mockTask, done: true });
+      mockClient.tasks.updateTask.mockImplementation((id: number) =>
+        Promise.resolve({ ...mockTask, id, done: true }),
+      );
 
       // Mock post-update fetches - one fails
       mockClient.tasks.getTask
@@ -2050,7 +2091,10 @@ describe('Tasks Tool', () => {
       const aorpStatus = parsed.getAorpStatus();
       expect(aorpStatus.type).toBe('success');
       expect(markdown).toContain('Successfully updated 3 tasks');
+      const tasksData = extractTasksData(markdown);
+      // Fallback path returns `updateTask` results for all successful IDs (no extra refetch pass).
       expect(tasksData.tasks).toHaveLength(3);
+      expect(mockClient.tasks.updateTask).toHaveBeenCalledTimes(3);
     });
 
     it('should handle bulk update for assignees field', async () => {
@@ -2276,14 +2320,17 @@ describe('Tasks Tool', () => {
         throw new TypeError('Cannot read property of undefined');
       });
 
-      // When all individual updates fail in the fallback, it should report failure
-      await expect(
-        callTool('bulk-update', {
-          taskIds: [1, 2],
-          field: 'priority',
-          value: 5,
-        }),
-      ).rejects.toThrow('Bulk update failed. Could not update any tasks. Failed IDs: 1, 2');
+      const result = await callTool('bulk-update', {
+        taskIds: [1, 2],
+        field: 'priority',
+        value: 5,
+      });
+
+      const markdown = result.content[0].text;
+      const parsed = parseMarkdown(markdown);
+      expect(parsed.getAorpStatus().type).toBe('success');
+      expect(markdown).toContain('could not be fetched');
+      expect(markdown).toContain('**fetchErrors:**');
     });
   });
 
@@ -2435,11 +2482,12 @@ describe('Tasks Tool', () => {
       const result = await callTool('bulk-create', { projectId: 1, tasks });
 
       expect(mockClient.tasks.createTask).toHaveBeenCalledTimes(3);
-      expect(result.content[0].text).toContain('"success": true');
+      expect(result.content[0].text).toContain('**success:** true');
       expect(result.content[0].text).toContain('Successfully created 3 tasks');
 
       const markdown = result.content[0].text;
       const parsed = parseMarkdown(markdown);
+      const tasksData = extractTasksData(markdown);
       expect(tasksData.tasks).toHaveLength(3);
     });
 
@@ -2521,13 +2569,11 @@ describe('Tasks Tool', () => {
 
       const result = await callTool('bulk-create', { projectId: 1, tasks });
 
-      expect(result.content[0].text).toContain('"success": false');
+      expect(result.content[0].text).toContain('## ❌ Error');
       expect(result.content[0].text).toContain('Bulk create partially completed');
       expect(result.content[0].text).toContain('Successfully created 2 tasks, 1 failed');
-
-      const markdown = result.content[0].text;
-      const parsed = parseMarkdown(markdown);
-      expect(tasksData.tasks).toHaveLength(2);
+      expect(result.content[0].text).toContain('**count:** 2');
+      expect(result.content[0].text).toContain('Failed to create task 2');
     });
 
     it('should handle complete failure', async () => {
@@ -2546,13 +2592,16 @@ describe('Tasks Tool', () => {
     it('should add labels and assignees after task creation', async () => {
       const tasks = [{ title: 'Task 1', labels: [1, 2], assignees: [3, 4] }];
 
+      mockClient.tasks.getTask.mockReset();
+      mockClient.tasks.addLabelToTask = jest.fn().mockResolvedValue({ task_id: 1, label_id: 1 } as any);
+      mockClient.tasks.removeLabelFromTask = jest.fn().mockResolvedValue({} as any);
       mockClient.tasks.createTask.mockResolvedValue({
         id: 1,
         title: 'Task 1',
         project_id: 1,
       });
 
-      mockClient.tasks.getTask.mockResolvedValue({
+      const taskAfterSync = {
         id: 1,
         title: 'Task 1',
         project_id: 1,
@@ -2564,19 +2613,27 @@ describe('Tasks Tool', () => {
           { id: 3, username: 'user3' },
           { id: 4, username: 'user4' },
         ],
+      };
+      let getTaskCalls = 0;
+      mockClient.tasks.getTask.mockImplementation(async () => {
+        getTaskCalls += 1;
+        if (getTaskCalls === 1) {
+          return { id: 1, title: 'Task 1', project_id: 1, labels: [] };
+        }
+        return taskAfterSync;
       });
 
       const result = await callTool('bulk-create', { projectId: 1, tasks });
 
-      expect(mockClient.tasks.updateTaskLabels).toHaveBeenCalledWith(1, {
-        label_ids: [1, 2],
-      });
+      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(1, { task_id: 1, label_id: 1 });
+      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(1, { task_id: 1, label_id: 2 });
       expect(mockClient.tasks.bulkAssignUsersToTask).toHaveBeenCalledWith(1, {
         user_ids: [3, 4],
       });
 
       const markdown = result.content[0].text;
       const parsed = parseMarkdown(markdown);
+      const tasksData = extractTasksData(markdown);
       expect(tasksData.tasks[0].labels).toHaveLength(2);
       expect(tasksData.tasks[0].assignees).toHaveLength(2);
     });
@@ -2590,7 +2647,7 @@ describe('Tasks Tool', () => {
         project_id: 1,
       });
 
-      mockClient.tasks.updateTaskLabels.mockRejectedValue(new Error('Label update failed'));
+      mockClient.tasks.addLabelToTask.mockRejectedValue(new Error('Label update failed'));
       mockClient.tasks.deleteTask.mockResolvedValue(undefined);
 
       await expect(
@@ -2623,7 +2680,7 @@ describe('Tasks Tool', () => {
         project_id: 1,
       });
 
-      mockClient.tasks.updateTaskLabels.mockRejectedValue(new Error('Label update failed'));
+      mockClient.tasks.addLabelToTask.mockRejectedValue(new Error('Label update failed'));
       mockClient.tasks.deleteTask.mockRejectedValue(new Error('Delete failed'));
 
       await expect(
@@ -2647,7 +2704,7 @@ describe('Tasks Tool', () => {
 
       const result = await callTool('bulk-create', { projectId: 1, tasks });
 
-      expect(result.content[0].text).toContain('"success": true');
+      expect(result.content[0].text).toContain('**success:** true');
       expect(result.content[0].text).toContain('Successfully created 1 tasks');
     });
 

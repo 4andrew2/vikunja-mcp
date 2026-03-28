@@ -47,7 +47,8 @@ describe('Tasks Memory Protection', () => {
         deleteTask: jest.fn(),
         getTaskComments: jest.fn(),
         createTaskComment: jest.fn(),
-        updateTaskLabels: jest.fn(),
+        addLabelToTask: jest.fn(),
+        removeLabelFromTask: jest.fn(),
         bulkAssignUsersToTask: jest.fn(),
         removeUserFromTask: jest.fn(),
         bulkUpdateTasks: jest.fn(),
@@ -96,7 +97,7 @@ describe('Tasks Memory Protection', () => {
 
     // Setup mock server
     mockServer = {
-      tool: jest.fn() as jest.MockedFunction<(name: string, schema: any, handler: any) => void>,
+      tool: jest.fn() as jest.MockedFunction<(name: string, description: string, schema: any, handler: any) => void>,
     } as MockServer;
 
     mockGetClientFromContext.mockResolvedValue(mockClient);
@@ -107,12 +108,13 @@ describe('Tasks Memory Protection', () => {
     // Get the tool handler
     expect(mockServer.tool).toHaveBeenCalledWith(
       'vikunja_tasks',
+      expect.any(String),
       expect.any(Object),
       expect.any(Function),
     );
     const calls = mockServer.tool.mock.calls;
-    if (calls.length > 0 && calls[0] && calls[0].length > 2) {
-      toolHandler = calls[0][2];
+    if (calls.length > 0 && calls[0] && calls[0].length > 3) {
+      toolHandler = calls[0][3];
     } else {
       throw new Error('Tool handler not found');
     }

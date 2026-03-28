@@ -66,7 +66,8 @@ describe('Tasks Tool - Race Condition Fix', () => {
         getAllTasks: jest.fn(),
         getProjectTasks: jest.fn(),
         createTask: jest.fn(),
-        updateTaskLabels: jest.fn(),
+        addLabelToTask: jest.fn(),
+        removeLabelFromTask: jest.fn(),
         bulkAssignUsersToTask: jest.fn(),
         getTask: jest.fn(),
         deleteTask: jest.fn(),
@@ -108,7 +109,8 @@ describe('Tasks Tool - Race Condition Fix', () => {
       };
 
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      mockClient.tasks.updateTaskLabels.mockRejectedValue(new Error('Label assignment failed'));
+      mockClient.tasks.getTask.mockResolvedValue({ ...createdTask, labels: [] });
+      mockClient.tasks.addLabelToTask.mockRejectedValue(new Error('Label assignment failed'));
 
       const args = {
         subcommand: 'create',
@@ -135,7 +137,8 @@ describe('Tasks Tool - Race Condition Fix', () => {
       };
 
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      mockClient.tasks.updateTaskLabels.mockResolvedValue({});
+      mockClient.tasks.getTask.mockResolvedValue({ ...createdTask, labels: [] });
+      mockClient.tasks.addLabelToTask.mockResolvedValue({});
       mockClient.tasks.bulkAssignUsersToTask.mockRejectedValue(new Error('User assignment failed'));
 
       const args = {
@@ -164,7 +167,8 @@ describe('Tasks Tool - Race Condition Fix', () => {
       };
 
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      mockClient.tasks.updateTaskLabels.mockRejectedValue(new Error('Label assignment failed'));
+      mockClient.tasks.getTask.mockResolvedValue({ ...createdTask, labels: [] });
+      mockClient.tasks.addLabelToTask.mockRejectedValue(new Error('Label assignment failed'));
       mockClient.tasks.deleteTask.mockRejectedValue(new Error('Delete failed'));
 
       const args = {
@@ -216,9 +220,16 @@ describe('Tasks Tool - Race Condition Fix', () => {
       };
 
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      mockClient.tasks.updateTaskLabels.mockResolvedValue({});
+      let getTaskCalls = 0;
+      mockClient.tasks.getTask.mockImplementation(() => {
+        getTaskCalls += 1;
+        if (getTaskCalls === 1) {
+          return Promise.resolve({ ...createdTask, labels: [] });
+        }
+        return Promise.resolve(completeTask);
+      });
+      mockClient.tasks.addLabelToTask.mockResolvedValue({});
       mockClient.tasks.bulkAssignUsersToTask.mockResolvedValue({});
-      mockClient.tasks.getTask.mockResolvedValue(completeTask);
 
       const args = {
         subcommand: 'create',

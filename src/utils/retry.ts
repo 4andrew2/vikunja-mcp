@@ -69,10 +69,17 @@ export interface RetryOptions {
   initialDelay?: number;
   backoffFactor?: number;
   maxDelay?: number;
+  /** When set, reuses one Opossum breaker across calls (tests and named shared limits). Otherwise each withRetry gets a unique breaker. */
+  circuitBreakerName?: string;
+  enableCircuitBreaker?: boolean;
 }
 
+type RetryOptionsDefaults = Required<
+  Omit<RetryOptions, 'shouldRetry' | 'circuitBreakerName' | 'enableCircuitBreaker'>
+>;
+
 // Production-ready defaults
-const DEFAULT_OPTIONS: Required<Omit<RetryOptions, 'shouldRetry'>> = {
+const DEFAULT_OPTIONS: RetryOptionsDefaults = {
   maxRetries: 3,
   timeout: 30000,
   resetTimeout: 30000,
@@ -124,13 +131,16 @@ export async function withRetry<T>(
   options: RetryOptions = {}
 ): Promise<T> {
   const opts = { ...DEFAULT_OPTIONS, ...options };
+  const breakerName =
+    options.circuitBreakerName ??
+    `withRetry-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+  // Opossum expects a thenable; bare jest.fn() often returns undefined and breaks fire().
+  const breaker = createCircuitBreaker(() => Promise.resolve(operation()), breakerName, opts);
   let lastError: unknown;
   let delay = opts.initialDelay || 1000;
 
   for (let attempt = 0; attempt <= (opts.maxRetries || 3); attempt++) {
     try {
-      // Use circuit breaker for the operation
-      const breaker = createCircuitBreaker(operation, 'anonymous', opts);
       return await breaker.fire() as Promise<T>;
     } catch (error) {
       lastError = error;
@@ -262,6 +272,19 @@ export const RETRY_CONFIG = {
     circuitBreakerName: 'vikunja-bulk-operations'
   }
 } as const;
+
+/**
+ * Auth retry timings without circuitBreakerName. Named breakers cache the first operation;
+ * do not reuse a shared breaker name when the wrapped call changes (per-label sync, per-user
+ * removal, or isolated Jest tests that re-register the same name with a new mock client).
+ */
+export const AUTH_RETRY_NO_SHARED_BREAKER: RetryOptions = {
+  maxRetries: RETRY_CONFIG.AUTH_ERRORS.maxRetries,
+  initialDelay: RETRY_CONFIG.AUTH_ERRORS.initialDelay,
+  maxDelay: RETRY_CONFIG.AUTH_ERRORS.maxDelay,
+  backoffFactor: RETRY_CONFIG.AUTH_ERRORS.backoffFactor,
+  enableCircuitBreaker: RETRY_CONFIG.AUTH_ERRORS.enableCircuitBreaker,
+};
 
 /**
  * Circuit breaker name constants for consistent naming across the application

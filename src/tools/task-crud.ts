@@ -109,7 +109,12 @@ export function registerTaskCrudTool(
       projectId: z.number().optional(),
       dueDate: z.string().optional(),
       priority: z.number().min(0).max(5).optional(),
-      labels: z.array(z.number()).optional(),
+      labels: z
+        .array(z.number())
+        .optional()
+        .describe(
+          'Label IDs. On update: [] clears all; non-empty merges with existing. On create: assigns after creation.',
+        ),
       assignees: z.array(z.number()).optional(),
       // Recurring task fields
       repeatAfter: z.number().min(0).optional(),

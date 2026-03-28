@@ -97,7 +97,11 @@ describe('Templates Tool', () => {
       tasks: {
         getProjectTasks: jest.fn(),
         createTask: jest.fn(),
-        updateTaskLabels: jest.fn(),
+        getTask: jest.fn((id: number) =>
+          Promise.resolve({ id, title: 'Task', project_id: 1, labels: [] }),
+        ),
+        addLabelToTask: jest.fn().mockResolvedValue({}),
+        removeLabelFromTask: jest.fn().mockResolvedValue({}),
       },
     } as any;
 
@@ -809,7 +813,6 @@ describe('Templates Tool', () => {
       });
       mockClient.projects.createProject.mockResolvedValue(newProject);
       mockClient.tasks.createTask.mockResolvedValue(newTask);
-      mockClient.tasks.updateTaskLabels.mockResolvedValue(undefined);
 
       const result = await toolHandler({
         subcommand: 'instantiate',
@@ -844,6 +847,14 @@ describe('Templates Tool', () => {
       expect(markdown).toContain("## ✅ Success");
       expect(markdown).toContain("**Operation:** instantiate-template");
       expect(markdown).toContain('Project "Sprint 24" created from template');
+      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(200, {
+        task_id: 200,
+        label_id: 1,
+      });
+      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(200, {
+        task_id: 200,
+        label_id: 2,
+      });
     });
 
     it('should handle label assignment failures gracefully', async () => {
@@ -864,7 +875,7 @@ describe('Templates Tool', () => {
       });
       mockClient.projects.createProject.mockResolvedValue({ ...mockProject, id: 100 });
       mockClient.tasks.createTask.mockResolvedValue({ ...mockTask, id: 200 });
-      mockClient.tasks.updateTaskLabels.mockRejectedValue(new Error('Label not found'));
+      mockClient.tasks.addLabelToTask.mockRejectedValue(new Error('Label not found'));
 
       const result = await toolHandler({
         subcommand: 'instantiate',
@@ -1163,7 +1174,6 @@ describe('Templates Tool', () => {
 
       // Task created with null ID
       mockClient.tasks.createTask.mockResolvedValue({ ...mockTask, id: null });
-      mockClient.tasks.updateTaskLabels.mockResolvedValue(undefined);
 
       const result = await toolHandler({
         subcommand: 'instantiate',
@@ -1172,7 +1182,8 @@ describe('Templates Tool', () => {
       });
 
       // Should use 0 as fallback for null task ID
-      expect(mockClient.tasks.updateTaskLabels).toHaveBeenCalledWith(0, { label_ids: [1, 2] });
+      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(0, { task_id: 0, label_id: 1 });
+      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(0, { task_id: 0, label_id: 2 });
     });
 
     it('should handle variable names with regex special characters', async () => {

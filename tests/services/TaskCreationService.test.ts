@@ -8,6 +8,13 @@ import { isAuthenticationError } from '../../src/utils/auth-error-handler';
 // Mock dependencies
 jest.mock('../../src/utils/logger');
 jest.mock('../../src/utils/auth-error-handler');
+jest.mock('../../src/utils/retry', () => {
+  const actual = jest.requireActual<typeof import('../../src/utils/retry')>('../../src/utils/retry');
+  return {
+    ...actual,
+    withRetry: jest.fn((fn: () => Promise<unknown>) => fn()),
+  };
+});
 
 // Import mocked logger for assertions
 import { logger } from '../../src/utils/logger';
@@ -27,7 +34,8 @@ describe('TaskCreationService', () => {
       tasks: {
         createTask: jest.fn(),
         getTask: jest.fn(),
-        updateTaskLabels: jest.fn(),
+        addLabelToTask: jest.fn().mockResolvedValue({}),
+        removeLabelFromTask: jest.fn().mockResolvedValue({}),
         bulkAssignUsersToTask: jest.fn(),
       },
     } as jest.Mocked<TypedVikunjaClient>;
@@ -79,13 +87,19 @@ describe('TaskCreationService', () => {
       } as Task;
 
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      mockClient.tasks.updateTaskLabels.mockResolvedValue({});
-      mockClient.tasks.getTask.mockResolvedValue({
-        ...createdTask,
-        labels: [
-          { id: 1, title: 'urgent' } as Label,
-          { id: 2, title: 'bug' } as Label,
-        ],
+      let getCalls = 0;
+      mockClient.tasks.getTask.mockImplementation(() => {
+        getCalls += 1;
+        if (getCalls === 1) {
+          return Promise.resolve({ ...createdTask, labels: [] });
+        }
+        return Promise.resolve({
+          ...createdTask,
+          labels: [
+            { id: 1, title: 'urgent' } as Label,
+            { id: 2, title: 'bug' } as Label,
+          ],
+        });
       });
       mockClient.tasks.bulkAssignUsersToTask.mockResolvedValue({});
 
@@ -102,6 +116,15 @@ describe('TaskCreationService', () => {
       expect(result.taskId).toBe(123);
       expect(result.title).toBe('Test Task');
       expect(result.warnings).toBeUndefined();
+
+      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(123, {
+        task_id: 123,
+        label_id: 1,
+      });
+      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(123, {
+        task_id: 123,
+        label_id: 2,
+      });
 
       expect(mockClient.tasks.createTask).toHaveBeenCalledWith(456, {
         project_id: 456,
@@ -230,13 +253,19 @@ describe('TaskCreationService', () => {
       } as Task;
 
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      mockClient.tasks.updateTaskLabels.mockResolvedValue({});
-      mockClient.tasks.getTask.mockResolvedValue({
-        ...createdTask,
-        labels: [
-          { id: 1, title: 'urgent' } as Label,
-          { id: 2, title: 'bug' } as Label,
-        ],
+      let getCallsL = 0;
+      mockClient.tasks.getTask.mockImplementation(() => {
+        getCallsL += 1;
+        if (getCallsL === 1) {
+          return Promise.resolve({ ...createdTask, labels: [] });
+        }
+        return Promise.resolve({
+          ...createdTask,
+          labels: [
+            { id: 1, title: 'urgent' } as Label,
+            { id: 2, title: 'bug' } as Label,
+          ],
+        });
       });
 
       // Act
@@ -250,8 +279,13 @@ describe('TaskCreationService', () => {
       // Assert
       expect(result.success).toBe(true);
       expect(result.warnings).toBeUndefined();
-      expect(mockClient.tasks.updateTaskLabels).toHaveBeenCalledWith(123, {
-        label_ids: [1, 2],
+      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(123, {
+        task_id: 123,
+        label_id: 1,
+      });
+      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(123, {
+        task_id: 123,
+        label_id: 2,
       });
       expect(mockClient.tasks.getTask).toHaveBeenCalledWith(123);
     });
@@ -266,10 +300,16 @@ describe('TaskCreationService', () => {
       } as Task;
 
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      mockClient.tasks.updateTaskLabels.mockResolvedValue({});
-      mockClient.tasks.getTask.mockResolvedValue({
-        ...createdTask,
-        labels: [], // No labels assigned despite successful API call
+      let getCallsSilent = 0;
+      mockClient.tasks.getTask.mockImplementation(() => {
+        getCallsSilent += 1;
+        if (getCallsSilent === 1) {
+          return Promise.resolve({ ...createdTask, labels: [] });
+        }
+        return Promise.resolve({
+          ...createdTask,
+          labels: [],
+        });
       });
 
       // Act
@@ -283,7 +323,7 @@ describe('TaskCreationService', () => {
       // Assert
       expect(result.success).toBe(true);
       expect(result.warnings).toHaveLength(1);
-      expect(result.warnings![0]).toContain('Labels specified but not assigned');
+      expect(result.warnings![0]).toContain('could not be confirmed on the task after assignment');
     });
 
     it('should handle label assignment authentication error', async () => {
@@ -298,7 +338,8 @@ describe('TaskCreationService', () => {
       (isAuthenticationError as jest.Mock).mockReturnValue(true);
 
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      mockClient.tasks.updateTaskLabels.mockRejectedValue(labelError);
+      mockClient.tasks.getTask.mockResolvedValueOnce({ ...createdTask, labels: [] });
+      mockClient.tasks.addLabelToTask.mockRejectedValue(labelError);
 
       // Act
       const result = await taskCreationService.createTask(
@@ -311,7 +352,7 @@ describe('TaskCreationService', () => {
       // Assert
       expect(result.success).toBe(true);
       expect(result.warnings).toHaveLength(1);
-      expect(result.warnings![0]).toContain('Label assignment requires JWT authentication');
+      expect(result.warnings![0]).toContain('Label assignment failed due to authentication');
     });
 
     it('should handle label assignment general error', async () => {
@@ -326,7 +367,8 @@ describe('TaskCreationService', () => {
       (isAuthenticationError as jest.Mock).mockReturnValue(false);
 
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      mockClient.tasks.updateTaskLabels.mockRejectedValue(labelError);
+      mockClient.tasks.getTask.mockResolvedValueOnce({ ...createdTask, labels: [] });
+      mockClient.tasks.addLabelToTask.mockRejectedValue(labelError);
 
       // Act
       const result = await taskCreationService.createTask(
@@ -356,13 +398,19 @@ describe('TaskCreationService', () => {
       } as Task;
 
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      mockClient.tasks.updateTaskLabels.mockResolvedValue({});
-      mockClient.tasks.getTask.mockResolvedValue({
-        ...createdTask,
-        labels: [
-          { id: 1, title: 'urgent' } as Label,
-          { id: 2, title: 'bug' } as Label,
-        ],
+      let getCallsUnk = 0;
+      mockClient.tasks.getTask.mockImplementation(() => {
+        getCallsUnk += 1;
+        if (getCallsUnk === 1) {
+          return Promise.resolve({ ...createdTask, labels: [] });
+        }
+        return Promise.resolve({
+          ...createdTask,
+          labels: [
+            { id: 1, title: 'urgent' } as Label,
+            { id: 2, title: 'bug' } as Label,
+          ],
+        });
       });
 
       // Act
@@ -389,8 +437,14 @@ describe('TaskCreationService', () => {
       } as Task;
 
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      mockClient.tasks.updateTaskLabels.mockResolvedValue({});
-      mockClient.tasks.getTask.mockRejectedValue(new Error('Verification failed'));
+      let getCallsVer = 0;
+      mockClient.tasks.getTask.mockImplementation(() => {
+        getCallsVer += 1;
+        if (getCallsVer === 1) {
+          return Promise.resolve({ ...createdTask, labels: [] });
+        }
+        return Promise.reject(new Error('Verification failed'));
+      });
 
       // Act
       const result = await taskCreationService.createTask(
@@ -403,7 +457,7 @@ describe('TaskCreationService', () => {
       // Assert
       expect(result.success).toBe(true);
       expect(result.warnings).toHaveLength(1);
-      expect(result.warnings![0]).toContain('Labels specified but not assigned');
+      expect(result.warnings![0]).toContain('could not be confirmed on the task after assignment');
     });
   });
 
@@ -610,7 +664,7 @@ describe('TaskCreationService', () => {
       // Assert
       expect(result.success).toBe(true);
       expect(result.warnings).toBeUndefined();
-      expect(mockClient.tasks.updateTaskLabels).not.toHaveBeenCalled();
+      expect(mockClient.tasks.addLabelToTask).not.toHaveBeenCalled();
       expect(mockClient.tasks.bulkAssignUsersToTask).not.toHaveBeenCalled();
     });
 
@@ -700,8 +754,14 @@ describe('TaskCreationService', () => {
       } as Task;
 
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      mockClient.tasks.updateTaskLabels.mockResolvedValue({});
-      mockClient.tasks.getTask.mockResolvedValue(createdTask); // Simulate label verification failure
+      let getCallsInt = 0;
+      mockClient.tasks.getTask.mockImplementation(() => {
+        getCallsInt += 1;
+        if (getCallsInt === 1) {
+          return Promise.resolve({ ...createdTask, labels: [] });
+        }
+        return Promise.resolve(createdTask);
+      });
       mockClient.tasks.bulkAssignUsersToTask.mockResolvedValue({});
 
       // Act
@@ -716,7 +776,7 @@ describe('TaskCreationService', () => {
       expect(result.success).toBe(true);
       expect(result.warnings).toHaveLength(4);
       expect(result.warnings![0]).toContain('Labels not found: unknown');
-      expect(result.warnings![1]).toContain('Labels specified but not assigned'); // Due to verification failure
+      expect(result.warnings![1]).toContain('could not be confirmed on the task after assignment');
       expect(result.warnings![2]).toContain('Users not found: unknown');
       expect(result.warnings![3]).toContain('Reminders cannot be added after task creation');
     });

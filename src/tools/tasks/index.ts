@@ -153,7 +153,12 @@ export function registerTasksTool(
       projectId: z.number().optional(),
       dueDate: z.string().optional(),
       priority: z.number().min(0).max(5).optional(),
-      labels: z.array(z.number()).optional(),
+      labels: z
+        .array(z.number())
+        .optional()
+        .describe(
+          'Label IDs. On update: [] clears all labels; non-empty merges with existing labels on the task. On create: assigns these labels after creation. Use apply-label to add labels without merging logic.',
+        ),
       assignees: z.array(z.number()).optional(),
       // Recurring task fields
       repeatAfter: z.number().min(0).optional(),

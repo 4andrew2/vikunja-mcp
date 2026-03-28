@@ -38,7 +38,8 @@ describe('Tasks CRUD - Final Coverage', () => {
         getTask: jest.fn(),
         updateTask: jest.fn(),
         deleteTask: jest.fn(),
-        updateTaskLabels: jest.fn(),
+        addLabelToTask: jest.fn(),
+        removeLabelFromTask: jest.fn(),
         bulkAssignUsersToTask: jest.fn(),
         removeUserFromTask: jest.fn(),
       },
@@ -279,11 +280,23 @@ describe('Tasks CRUD - Final Coverage', () => {
         repeat_mode: 0,
       };
 
+      const taskAfterLabels = {
+        ...mockTask,
+        labels: [
+          { id: 1, title: 'L1' },
+          { id: 2, title: 'L2' },
+        ],
+      };
+
       mockClient.tasks.getTask
-        .mockResolvedValueOnce(mockTask) // Initial fetch
+        .mockResolvedValueOnce(mockTask) // Initial fetch (analyze)
+        .mockResolvedValueOnce(updatedTask) // Post-PUT merge source for labels
+        .mockResolvedValueOnce(updatedTask) // syncTaskLabelsToTarget internal getTask
+        .mockResolvedValueOnce(taskAfterLabels) // Label verification re-fetch
+        .mockResolvedValueOnce(mockTask) // Assignee diff fetch
         .mockResolvedValueOnce(updatedTask); // Final fetch
       mockClient.tasks.updateTask.mockResolvedValue(updatedTask);
-      mockClient.tasks.updateTaskLabels.mockResolvedValue(undefined);
+      mockClient.tasks.addLabelToTask.mockResolvedValue(undefined);
       mockClient.tasks.bulkAssignUsersToTask.mockResolvedValue(undefined);
 
       const result = await updateTask({

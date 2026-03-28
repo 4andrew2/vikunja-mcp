@@ -13,6 +13,7 @@ import type { Project, Task } from 'node-vikunja';
 import { storageManager } from '../storage';
 import { logger } from '../utils/logger';
 import { formatAorpAsMarkdown } from '../utils/response-factory';
+import { syncTaskLabelsToTarget } from './tasks/label-assignment';
 
 /**
  * Get session-scoped storage instance
@@ -381,9 +382,7 @@ export function registerTemplatesTool(server: McpServer, authManager: AuthManage
                   // Add labels if any
                   if (taskTemplate.labels && taskTemplate.labels.length > 0) {
                     try {
-                      await client.tasks.updateTaskLabels(createdTask.id ?? 0, {
-                        label_ids: taskTemplate.labels,
-                      });
+                      await syncTaskLabelsToTarget(client, createdTask.id ?? 0, taskTemplate.labels);
                     } catch (labelError) {
                       logger.warn('Failed to add labels to task', {
                         taskId: createdTask.id,

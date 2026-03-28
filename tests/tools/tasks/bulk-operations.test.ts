@@ -25,7 +25,8 @@ describe('Bulk operations', () => {
       createTask: jest.fn(),
       bulkAssignUsersToTask: jest.fn(),
       removeUserFromTask: jest.fn(),
-      updateTaskLabels: jest.fn(),
+      addLabelToTask: jest.fn(),
+      removeLabelFromTask: jest.fn(),
     },
   };
 
@@ -506,12 +507,19 @@ describe('Bulk operations', () => {
         const mockTask = { id: 1, title: 'Test Task', project_id: 1 };
 
         mockClient.tasks.createTask.mockResolvedValue(mockTask);
-        mockClient.tasks.updateTaskLabels.mockResolvedValue({});
+        mockClient.tasks.addLabelToTask.mockResolvedValue({});
         mockClient.tasks.bulkAssignUsersToTask.mockResolvedValue({});
-        mockClient.tasks.getTask.mockResolvedValue({
-          ...mockTask,
-          labels: [{ id: 1 }],
-          assignees: [{ id: 1 }],
+        let getN = 0;
+        mockClient.tasks.getTask.mockImplementation(async () => {
+          getN += 1;
+          if (getN === 1) {
+            return { ...mockTask, labels: [] };
+          }
+          return {
+            ...mockTask,
+            labels: [{ id: 1 }],
+            assignees: [{ id: 1 }],
+          };
         });
 
         const result = await bulkCreateTasks({
@@ -523,8 +531,9 @@ describe('Bulk operations', () => {
           }]
         });
 
-        expect(mockClient.tasks.updateTaskLabels).toHaveBeenCalledWith(1, {
-          label_ids: [1],
+        expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(1, {
+          task_id: 1,
+          label_id: 1,
         });
         expect(mockClient.tasks.bulkAssignUsersToTask).toHaveBeenCalledWith(1, {
           user_ids: [1],
@@ -635,6 +644,7 @@ describe('Bulk operations', () => {
         const deleteError = new Error('Cleanup failed');
         
         mockClient.tasks.createTask.mockResolvedValue(mockTask);
+        mockClient.tasks.getTask.mockResolvedValue({ ...mockTask, labels: [] });
         (withRetry as jest.Mock).mockRejectedValue(labelError);
         mockClient.tasks.deleteTask.mockRejectedValue(deleteError);
 

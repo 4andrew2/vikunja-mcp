@@ -8,10 +8,11 @@ import type { Task, VikunjaClient } from 'node-vikunja';
 import { logger } from '../../../utils/logger';
 import { formatAorpAsMarkdown } from '../../../utils/response-factory';
 import { isAuthenticationError } from '../../../utils/auth-error-handler';
-import { withRetry, RETRY_CONFIG } from '../../../utils/retry';
+import { withRetry, RETRY_CONFIG, AUTH_RETRY_NO_SHARED_BREAKER } from '../../../utils/retry';
 import { BatchProcessorFactory } from './index';
 import { AUTH_ERROR_MESSAGES } from '../constants';
 import { applyFieldUpdate } from '../validation';
+import { stripTaskRelationFieldsForUpdate, syncTaskLabelsToTarget, verifyTaskLabelAssignment } from '../label-assignment';
 import type { BulkUpdateArgs } from './BulkOperationValidator';
 import type { BatchResult } from '../../../utils/performance/batch-processor';
 
@@ -59,7 +60,11 @@ export const bulkOperationErrorHandler = {
     const currentTask = await client.tasks.getTask(taskId);
 
     // Apply field update using shared utility
-    const updateData = applyFieldUpdate({ ...currentTask }, args.field, args.value);
+    const updateData = applyFieldUpdate(
+      stripTaskRelationFieldsForUpdate({ ...currentTask }),
+      args.field,
+      args.value,
+    );
 
     // Update the task
     const updatedTask = await client.tasks.updateTask(taskId, updateData);
@@ -84,15 +89,12 @@ export const bulkOperationErrorHandler = {
     }
 
     if (args.field === 'labels' && Array.isArray(args.value)) {
-      await withRetry(
-        () => client.tasks.updateTaskLabels(taskId, {
-          label_ids: args.value as number[],
-        }),
-        {
-          ...RETRY_CONFIG.AUTH_ERRORS,
-          shouldRetry: (error) => isAuthenticationError(error)
-        }
-      );
+      const labelIds = args.value as number[];
+      await syncTaskLabelsToTarget(client, taskId, labelIds);
+      const labelsOk = await verifyTaskLabelAssignment(client, taskId, labelIds);
+      if (!labelsOk) {
+        throw new MCPError(ErrorCode.API_ERROR, AUTH_ERROR_MESSAGES.LABEL_VERIFY_FAILED);
+      }
     }
   },
 
@@ -116,7 +118,7 @@ export const bulkOperationErrorHandler = {
             user_ids: newAssigneeIds,
           }),
           {
-            ...RETRY_CONFIG.AUTH_ERRORS,
+            ...AUTH_RETRY_NO_SHARED_BREAKER,
             shouldRetry: (error) => isAuthenticationError(error)
           }
         );
@@ -128,7 +130,7 @@ export const bulkOperationErrorHandler = {
           await withRetry(
             () => client.tasks.removeUserFromTask(taskId, userId),
             {
-              ...RETRY_CONFIG.AUTH_ERRORS,
+              ...AUTH_RETRY_NO_SHARED_BREAKER,
               shouldRetry: (error) => isAuthenticationError(error)
             }
           );

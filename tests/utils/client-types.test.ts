@@ -17,7 +17,7 @@ describe('Client Type Safety', () => {
       'rollbackTaskCreation',
       'gatherDeletionContext',
       'analyzeUpdateState',
-      'updateTaskLabels',
+      'addLabelToTask',
       'updateTaskAssignees'
     ];
 

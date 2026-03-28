@@ -8,10 +8,11 @@ import { getClientFromContext } from '../../../client';
 import type { Task, VikunjaClient } from 'node-vikunja';
 import { logger } from '../../../utils/logger';
 import { isAuthenticationError } from '../../../utils/auth-error-handler';
-import { withRetry, RETRY_CONFIG } from '../../../utils/retry';
+import { withRetry, RETRY_CONFIG, AUTH_RETRY_NO_SHARED_BREAKER } from '../../../utils/retry';
 import { transformApiError, handleFetchError } from '../../../utils/error-handler';
 import { sanitizeString } from '../../../utils/validation';
 import { AUTH_ERROR_MESSAGES } from '../constants';
+import { syncTaskLabelsToTarget, verifyTaskLabelAssignment } from '../label-assignment';
 import { validateDateString, validateId, convertRepeatConfiguration } from '../validation';
 import { createTaskResponse } from './TaskResponseFormatter';
 import { formatAorpAsMarkdown } from '../../../utils/response-factory';
@@ -102,11 +103,21 @@ export async function createTask(args: CreateTaskArgs): Promise<{ content: Array
       assigneesAdded: false
     };
 
+    let labelVerificationWarning: string | undefined;
+
     try {
       // Add labels if provided
       if (args.labels && args.labels.length > 0 && createdTask.id) {
         await addLabelsToTask(client, createdTask.id, args.labels);
         creationState.labelsAdded = true;
+        const labelsVerified = await verifyTaskLabelAssignment(client, createdTask.id, args.labels);
+        if (!labelsVerified) {
+          labelVerificationWarning = AUTH_ERROR_MESSAGES.LABEL_VERIFY_FAILED;
+          logger.warn('Label verification failed after task create', {
+            taskId: createdTask.id,
+            labelIds: args.labels,
+          });
+        }
       }
 
       // Add assignees if provided
@@ -121,18 +132,25 @@ export async function createTask(args: CreateTaskArgs): Promise<{ content: Array
       // The rollback function will re-throw the original error with context
     }
 
-    // Fetch the complete task with labels and assignees
-    const completeTask = createdTask.id ? await client.tasks.getTask(createdTask.id) : createdTask;
+    // Fetch the complete task with labels and assignees (fallback if GET returns nothing)
+    const fetchedComplete = createdTask.id ? await client.tasks.getTask(createdTask.id) : createdTask;
+    const completeTask = fetchedComplete ?? createdTask;
+
+    const createMessage =
+      labelVerificationWarning !== undefined
+        ? `Task created successfully. Warning: ${labelVerificationWarning}`
+        : 'Task created successfully';
 
     const response = createTaskResponse(
       'create-task',
-      'Task created successfully',
+      createMessage,
       { task: completeTask },
       {
         timestamp: new Date().toISOString(),
         projectId: args.projectId,
         labelsAdded: args.labels ? args.labels.length > 0 : false,
         assigneesAdded: args.assignees ? args.assignees.length > 0 : false,
+        ...(labelVerificationWarning !== undefined && { warnings: [labelVerificationWarning] }),
       },
       undefined, // verbosity (ignored - using standard AORP)
       undefined, // useOptimizedFormat (ignored - using standard AORP)
@@ -179,15 +197,7 @@ export async function createTask(args: CreateTaskArgs): Promise<{ content: Array
  */
 async function addLabelsToTask(client: VikunjaClient, taskId: number, labelIds: number[]): Promise<void> {
   try {
-    await withRetry(
-      () => client.tasks.updateTaskLabels(taskId, {
-        label_ids: labelIds,
-      }),
-      {
-        ...RETRY_CONFIG.AUTH_ERRORS,
-        shouldRetry: (error) => isAuthenticationError(error)
-      }
-    );
+    await syncTaskLabelsToTarget(client, taskId, labelIds);
   } catch (labelError) {
     // Check if it's an auth error after retries
     if (isAuthenticationError(labelError)) {
@@ -210,8 +220,8 @@ async function addAssigneesToTask(client: VikunjaClient, taskId: number, assigne
         user_ids: assigneeIds,
       }),
       {
-        ...RETRY_CONFIG.AUTH_ERRORS,
-        shouldRetry: (error) => isAuthenticationError(error)
+        ...AUTH_RETRY_NO_SHARED_BREAKER,
+        shouldRetry: (error) => isAuthenticationError(error),
       }
     );
   } catch (assigneeError) {

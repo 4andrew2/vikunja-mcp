@@ -2,11 +2,13 @@
  * Label operations for tasks
  */
 
+import type { Label } from 'node-vikunja';
 import type { MinimalTask } from '../../types';
 import { MCPError, ErrorCode } from '../../types';
 import { getClientFromContext } from '../../client';
 import { isAuthenticationError } from '../../utils/auth-error-handler';
-import { withRetry, RETRY_CONFIG } from '../../utils/retry';
+import { AUTH_ERROR_MESSAGES } from './constants';
+import { mergeLabelIdsForUpdate, syncTaskLabelsToTarget, verifyTaskLabelAssignment } from './label-assignment';
 import { validateId } from './validation';
 import { createSimpleResponse, formatAorpAsMarkdown } from '../../utils/response-factory';
 
@@ -17,60 +19,42 @@ export async function applyLabels(args: {
   id?: number;
   labels?: number[];
 }): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  if (!args.id) {
+    throw new MCPError(
+      ErrorCode.VALIDATION_ERROR,
+      'Task id is required for apply-label operation',
+    );
+  }
+  validateId(args.id, 'id');
+
+  if (!args.labels || args.labels.length === 0) {
+    throw new MCPError(ErrorCode.VALIDATION_ERROR, 'At least one label id is required');
+  }
+
+  args.labels.forEach((id) => validateId(id, 'label ID'));
+
+  const client = await getClientFromContext();
+  const taskId = args.id;
+  const requestedIds = args.labels;
+
   try {
-    if (!args.id) {
-      throw new MCPError(
-        ErrorCode.VALIDATION_ERROR,
-        'Task id is required for apply-label operation',
-      );
-    }
-    validateId(args.id, 'id');
+    const current = await client.tasks.getTask(taskId);
+    const mergedIds = mergeLabelIdsForUpdate(current, requestedIds);
 
-    if (!args.labels || args.labels.length === 0) {
-      throw new MCPError(ErrorCode.VALIDATION_ERROR, 'At least one label id is required');
+    await syncTaskLabelsToTarget(client, taskId, mergedIds);
+
+    const verified = await verifyTaskLabelAssignment(client, taskId, mergedIds);
+    if (!verified) {
+      throw new MCPError(ErrorCode.API_ERROR, AUTH_ERROR_MESSAGES.LABEL_VERIFY_FAILED);
     }
 
-    // Validate label IDs
-    args.labels.forEach((id) => validateId(id, 'label ID'));
-
-    const client = await getClientFromContext();
-    const taskId = args.id;
-    const labelIds = args.labels;
-
-    // Add labels to the task with retry logic
-    for (const labelId of labelIds) {
-      try {
-        await withRetry(
-          () =>
-            client.tasks.addLabelToTask(taskId, {
-              task_id: taskId,
-              label_id: labelId,
-            }),
-          {
-            ...RETRY_CONFIG.AUTH_ERRORS,
-            shouldRetry: (error: unknown) => isAuthenticationError(error),
-          },
-        );
-      } catch (labelError) {
-        // Check if it's an auth error after retries
-        if (isAuthenticationError(labelError)) {
-          throw new MCPError(
-            ErrorCode.API_ERROR,
-            `Failed to apply label to task (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times)`,
-          );
-        }
-        throw labelError;
-      }
-    }
-
-    // Fetch the updated task to show current labels
     const task = await client.tasks.getTask(args.id);
 
     const response = createSimpleResponse(
       'apply-label',
-      `Label${labelIds.length > 1 ? 's' : ''} applied to task successfully`,
+      `Label${requestedIds.length > 1 ? 's' : ''} applied to task successfully`,
       { task },
-      { metadata: { affectedFields: ['labels'] } }
+      { metadata: { affectedFields: ['labels'] } },
     );
 
     return {
@@ -82,6 +66,12 @@ export async function applyLabels(args: {
       ],
     };
   } catch (error) {
+    if (error instanceof MCPError) {
+      throw error;
+    }
+    if (isAuthenticationError(error)) {
+      throw new MCPError(ErrorCode.API_ERROR, AUTH_ERROR_MESSAGES.LABEL_UPDATE);
+    }
     throw new MCPError(
       ErrorCode.API_ERROR,
       `Failed to apply labels to task: ${error instanceof Error ? error.message : String(error)}`,
@@ -96,53 +86,45 @@ export async function removeLabels(args: {
   id?: number;
   labels?: number[];
 }): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  if (!args.id) {
+    throw new MCPError(
+      ErrorCode.VALIDATION_ERROR,
+      'Task id is required for remove-label operation',
+    );
+  }
+  validateId(args.id, 'id');
+
+  if (!args.labels || args.labels.length === 0) {
+    throw new MCPError(ErrorCode.VALIDATION_ERROR, 'At least one label id is required to remove');
+  }
+
+  args.labels.forEach((id) => validateId(id, 'label ID'));
+
+  const client = await getClientFromContext();
+  const taskId = args.id;
+  const labelIdsToRemove = args.labels;
+
   try {
-    if (!args.id) {
-      throw new MCPError(
-        ErrorCode.VALIDATION_ERROR,
-        'Task id is required for remove-label operation',
-      );
-    }
-    validateId(args.id, 'id');
+    const current = await client.tasks.getTask(taskId);
+    const existing =
+      current.labels?.map((l: Label) => l.id).filter((id): id is number => id !== undefined) ?? [];
+    const removeSet = new Set(labelIdsToRemove);
+    const remaining = existing.filter((id) => !removeSet.has(id));
 
-    if (!args.labels || args.labels.length === 0) {
-      throw new MCPError(ErrorCode.VALIDATION_ERROR, 'At least one label id is required to remove');
-    }
+    await syncTaskLabelsToTarget(client, taskId, remaining);
 
-    // Validate label IDs
-    args.labels.forEach((id) => validateId(id, 'label ID'));
-
-    const client = await getClientFromContext();
-    const taskId = args.id;
-    const labelIds = args.labels;
-
-    // Remove labels from the task with retry logic
-    for (const labelId of labelIds) {
-      try {
-        await withRetry(() => client.tasks.removeLabelFromTask(taskId, labelId), {
-          ...RETRY_CONFIG.AUTH_ERRORS,
-          shouldRetry: (error: unknown) => isAuthenticationError(error),
-        });
-      } catch (removeError) {
-        // Check if it's an auth error after retries
-        if (isAuthenticationError(removeError)) {
-          throw new MCPError(
-            ErrorCode.API_ERROR,
-            `Failed to remove label from task (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times)`,
-          );
-        }
-        throw removeError;
-      }
+    const verified = await verifyTaskLabelAssignment(client, taskId, remaining);
+    if (!verified) {
+      throw new MCPError(ErrorCode.API_ERROR, AUTH_ERROR_MESSAGES.LABEL_VERIFY_FAILED);
     }
 
-    // Fetch the updated task to show current labels
     const task = await client.tasks.getTask(args.id);
 
     const response = createSimpleResponse(
       'remove-label',
-      `Label${labelIds.length > 1 ? 's' : ''} removed from task successfully`,
+      `Label${labelIdsToRemove.length > 1 ? 's' : ''} removed from task successfully`,
       { task },
-      { metadata: { affectedFields: ['labels'] } }
+      { metadata: { affectedFields: ['labels'] } },
     );
 
     return {
@@ -154,6 +136,12 @@ export async function removeLabels(args: {
       ],
     };
   } catch (error) {
+    if (error instanceof MCPError) {
+      throw error;
+    }
+    if (isAuthenticationError(error)) {
+      throw new MCPError(ErrorCode.API_ERROR, AUTH_ERROR_MESSAGES.LABEL_UPDATE);
+    }
     throw new MCPError(
       ErrorCode.API_ERROR,
       `Failed to remove labels from task: ${error instanceof Error ? error.message : String(error)}`,
@@ -192,7 +180,7 @@ export async function listTaskLabels(args: {
       'list-labels',
       `Task has ${labels.length} label(s)`,
       { task: { ...minimalTask, labels: labels } },
-      { metadata: { count: labels.length } }
+      { metadata: { count: labels.length } },
     );
 
     return {

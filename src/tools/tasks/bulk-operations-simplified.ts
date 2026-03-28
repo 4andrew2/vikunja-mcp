@@ -3,12 +3,14 @@
  * Consolidates BulkOperationProcessor, BulkOperationErrorHandler, BulkOperationValidator, and BatchProcessorFactory
  */
 
-import { MCPError, ErrorCode, createStandardResponse, getClientFromContext, logger, isAuthenticationError, RETRY_CONFIG, transformApiError, handleFetchError } from '../../index';
+import { MCPError, ErrorCode, createStandardResponse, logger, isAuthenticationError, RETRY_CONFIG, transformApiError, handleFetchError } from '../../index';
+import { getClientFromContext } from '../../client';
 import type { Assignee } from '../../types';
-import { withRetry } from '../../utils/retry';
+import { withRetry, AUTH_RETRY_NO_SHARED_BREAKER } from '../../utils/retry';
 import { BatchProcessor } from '../../utils/performance/batch-processor';
 import type { Task } from 'node-vikunja';
 import { convertRepeatConfiguration, applyFieldUpdate } from './validation';
+import { stripTaskRelationFieldsForUpdate, syncTaskLabelsToTarget, verifyTaskLabelAssignment } from './label-assignment';
 import { formatAorpAsMarkdown } from '../../utils/response-factory';
 import { AUTH_ERROR_MESSAGES, REPEAT_MODE_MAP } from './constants';
 import { bulkOperationValidator } from './bulk/BulkOperationValidator';
@@ -59,7 +61,8 @@ export async function bulkUpdateTasks(args: BulkUpdateArgs): Promise<{ content: 
     const updateWithFallback = async (): Promise<{ content: Array<{ type: 'text'; text: string }> }> => {
       const updateResult = await processors.update.processBatches(taskIds, async (taskId) => {
         const current = await client.tasks.getTask(taskId);
-        const update = applyFieldUpdate({ ...current }, args.field, args.value);
+        const base = stripTaskRelationFieldsForUpdate({ ...current });
+        const update = applyFieldUpdate(base, args.field, args.value);
 
         const updated = await client.tasks.updateTask(taskId, update);
 
@@ -67,19 +70,24 @@ export async function bulkUpdateTasks(args: BulkUpdateArgs): Promise<{ content: 
           const currentAssignees = (await client.tasks.getTask(taskId)).assignees?.map((a: Assignee) => a.id) || [];
           if (args.value.length > 0) {
             try {
-              await withRetry(() => client.tasks.bulkAssignUsersToTask(taskId, { user_ids: args.value as number[] }), { ...RETRY_CONFIG.AUTH_ERRORS, shouldRetry: isAuthenticationError });
+              await withRetry(() => client.tasks.bulkAssignUsersToTask(taskId, { user_ids: args.value as number[] }), { ...AUTH_RETRY_NO_SHARED_BREAKER, shouldRetry: isAuthenticationError });
             } catch (assigneeError) {
               if (isAuthenticationError(assigneeError)) throw new MCPError(ErrorCode.API_ERROR, 'Assignee operations may have authentication issues');
               throw assigneeError;
             }
           }
           for (const userId of currentAssignees) {
-            try { await withRetry(() => client.tasks.removeUserFromTask(taskId, userId), { ...RETRY_CONFIG.AUTH_ERRORS, shouldRetry: isAuthenticationError }); }
+            try { await withRetry(() => client.tasks.removeUserFromTask(taskId, userId), { ...AUTH_RETRY_NO_SHARED_BREAKER, shouldRetry: isAuthenticationError }); }
             catch (e) { if (isAuthenticationError(e)) throw new MCPError(ErrorCode.API_ERROR, `${AUTH_ERROR_MESSAGES.ASSIGNEE_REMOVE_PARTIAL} (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times)`); throw e; }
           }
         }
         if (args.field === 'labels' && Array.isArray(args.value)) {
-          await withRetry(() => client.tasks.updateTaskLabels(taskId, { label_ids: args.value as number[] }), { ...RETRY_CONFIG.AUTH_ERRORS, shouldRetry: isAuthenticationError });
+          const labelIds = args.value as number[];
+          await syncTaskLabelsToTarget(client, taskId, labelIds);
+          const labelsOk = await verifyTaskLabelAssignment(client, taskId, labelIds);
+          if (!labelsOk) {
+            throw new MCPError(ErrorCode.API_ERROR, AUTH_ERROR_MESSAGES.LABEL_VERIFY_FAILED);
+          }
         }
         return updated;
       });
@@ -219,7 +227,10 @@ export async function bulkCreateTasks(args: BulkCreateArgs): Promise<{ content: 
 
         try {
           const labels = t.labels;
-          if (labels && labels.length > 0) await withRetry(() => client.tasks.updateTaskLabels(createdId, { label_ids: labels }), { maxRetries: RETRY_CONFIG.AUTH_ERRORS.maxRetries ?? 3, timeout: (RETRY_CONFIG.AUTH_ERRORS.initialDelay ?? 1000) + (RETRY_CONFIG.AUTH_ERRORS.maxDelay ?? 10000), shouldRetry: isAuthenticationError });
+          if (labels && labels.length > 0) {
+            await syncTaskLabelsToTarget(client, createdId, labels);
+            // Post-create verification is handled in single-task CRUD; bulk-create skips an extra GET per task here.
+          }
           const assignees = t.assignees;
           if (assignees && assignees.length > 0) {
             try {
@@ -255,8 +266,17 @@ export async function bulkCreateTasks(args: BulkCreateArgs): Promise<{ content: 
     const failedTasks = creationResult.failed.map(f => ({ index: f.originalItem as number, error: f.error instanceof Error ? f.error.message : String(f.error) }));
     if (failedTasks.length > 0 && creationResult.successful.length === 0) {
       const firstError = creationResult.failed[0]?.error;
-      // Preserve MCPError instances with auth messages or label/assignee marker
-      if (firstError instanceof MCPError && (firstError.message.includes('authentication') || (firstError as unknown as Record<string, unknown>).isLabelAssigneeError === true)) throw firstError;
+      const isLabelAssigneeWrapped =
+        firstError instanceof MCPError &&
+        (firstError as unknown as { isLabelAssigneeError?: boolean }).isLabelAssigneeError === true;
+      // Preserve assignee auth MCP errors and label/assignee wrapped errors from post-create steps
+      if (
+        firstError instanceof MCPError &&
+        (firstError.message.includes('Assignee operations may have authentication issues') ||
+          isLabelAssigneeWrapped)
+      ) {
+        throw firstError;
+      }
       // Transform all other errors (including API errors) into generic bulk create error
       throw new MCPError(ErrorCode.API_ERROR, `Bulk create failed. Could not create any tasks`);
     }

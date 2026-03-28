@@ -4,7 +4,9 @@
  */
 
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import type { Task } from 'node-vikunja';
 import { createTask, getTask, updateTask, deleteTask } from '../../src/tools/tasks/crud';
+import { stripTaskRelationFieldsForUpdate } from '../../src/tools/tasks/label-assignment';
 import { MCPError, ErrorCode } from '../../src/types';
 import type { MockVikunjaClient } from '../types/mocks';
 import { parseMarkdown } from '../utils/markdown';
@@ -38,7 +40,8 @@ describe('Tasks CRUD - Edge Cases and Defensive Programming', () => {
         getTask: jest.fn(),
         updateTask: jest.fn(),
         deleteTask: jest.fn(),
-        updateTaskLabels: jest.fn(),
+        addLabelToTask: jest.fn(),
+        removeLabelFromTask: jest.fn(),
         bulkAssignUsersToTask: jest.fn(),
         removeUserFromTask: jest.fn(),
       },
@@ -139,7 +142,7 @@ describe('Tasks CRUD - Edge Cases and Defensive Programming', () => {
       });
 
       // Empty arrays should not trigger label/assignee operations
-      expect(mockClient.tasks.updateTaskLabels).not.toHaveBeenCalled();
+      expect(mockClient.tasks.addLabelToTask).not.toHaveBeenCalled();
       expect(mockClient.tasks.bulkAssignUsersToTask).not.toHaveBeenCalled();
 
       const markdown = result.content[0].text;
@@ -159,7 +162,7 @@ describe('Tasks CRUD - Edge Cases and Defensive Programming', () => {
       });
 
       // Should not attempt label operations without task ID
-      expect(mockClient.tasks.updateTaskLabels).not.toHaveBeenCalled();
+      expect(mockClient.tasks.addLabelToTask).not.toHaveBeenCalled();
       expect(mockClient.tasks.getTask).not.toHaveBeenCalled();
 
       const markdown = result.content[0].text;
@@ -214,9 +217,9 @@ describe('Tasks CRUD - Edge Cases and Defensive Programming', () => {
         done: false, // Same value
       });
 
-      // Should still call updateTask but with no affected fields
+      // Should still call updateTask but with no affected fields (assignees stripped from payload)
       expect(mockClient.tasks.updateTask).toHaveBeenCalledWith(1, {
-        ...mockTask,
+        ...stripTaskRelationFieldsForUpdate(mockTask as unknown as Task),
         title: 'Original Title',
         description: 'Original Description',
         priority: 1,
@@ -491,7 +494,7 @@ describe('Tasks CRUD - Edge Cases and Defensive Programming', () => {
     it('should handle assignee failure during createTask', async () => {
       const createdTask = { id: 1, title: 'Test Task', project_id: 1 };
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      
+
       // Mock assignee assignment failure
       const assigneeError = new Error('Assignee assignment failed');
       mockClient.tasks.bulkAssignUsersToTask.mockRejectedValue(assigneeError);
@@ -511,10 +514,11 @@ describe('Tasks CRUD - Edge Cases and Defensive Programming', () => {
     it('should handle rollback failure during createTask', async () => {
       const createdTask = { id: 1, title: 'Test Task', project_id: 1 };
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      
+      mockClient.tasks.getTask.mockResolvedValue({ ...createdTask, labels: [] });
+
       // Mock label assignment failure
       const labelError = new Error('Label assignment failed');
-      mockClient.tasks.updateTaskLabels.mockRejectedValue(labelError);
+      mockClient.tasks.addLabelToTask.mockRejectedValue(labelError);
       
       // Mock failed rollback
       const deleteError = new Error('Delete failed');

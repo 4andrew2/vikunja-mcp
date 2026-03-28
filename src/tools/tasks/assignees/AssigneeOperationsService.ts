@@ -7,7 +7,7 @@ import type { MinimalTask, TaskWithAssignees, Assignee } from '../../../types';
 import { MCPError, ErrorCode } from '../../../types';
 import { getClientFromContext } from '../../../client';
 import { isAuthenticationError } from '../../../utils/auth-error-handler';
-import { withRetry, RETRY_CONFIG } from '../../../utils/retry';
+import { withRetry, RETRY_CONFIG, AUTH_RETRY_NO_SHARED_BREAKER } from '../../../utils/retry';
 import { AUTH_ERROR_MESSAGES } from '../constants';
 
 /**
@@ -26,7 +26,7 @@ export const AssigneeOperationsService = {
           user_ids: assigneeIds,
         }),
         {
-          ...RETRY_CONFIG.AUTH_ERRORS,
+          ...AUTH_RETRY_NO_SHARED_BREAKER,
           shouldRetry: (error) => isAuthenticationError(error)
         }
       );
@@ -54,7 +54,7 @@ export const AssigneeOperationsService = {
         await withRetry(
           () => client.tasks.removeUserFromTask(taskId, userId),
           {
-            ...RETRY_CONFIG.AUTH_ERRORS,
+            ...AUTH_RETRY_NO_SHARED_BREAKER,
             shouldRetry: (error) => isAuthenticationError(error)
           }
         );

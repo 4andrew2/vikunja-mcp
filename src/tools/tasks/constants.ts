@@ -28,6 +28,9 @@ export const AUTH_ERROR_MESSAGES = {
   LABEL_UPDATE:
     'Label operations may have authentication issues with certain Vikunja API versions. ' +
     'This is a known limitation. Other task fields were updated but labels could not be changed.',
+  /** After per-label PUT/DELETE sync, GET task did not include expected label IDs. */
+  LABEL_VERIFY_FAILED:
+    'Labels did not show on the task after assignment. Confirm the label IDs exist, belong to this project, and your token can modify tasks.',
 };
 
 // Bulk operation constants

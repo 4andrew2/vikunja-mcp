@@ -6,6 +6,7 @@ import type { Task, Label, User } from 'node-vikunja';
 import type { TypedVikunjaClient } from '../types/node-vikunja-extended';
 import type { ImportedTask } from '../parsers/InputParserFactory';
 import type { EntityResolutionResult } from './EntityResolver';
+import { syncTaskLabelsToTarget } from '../tools/tasks/label-assignment';
 
 /**
  * Converts TaskCreationData to a Task object compatible with node-vikunja API
@@ -266,23 +267,19 @@ export class TaskCreationService {
 
     if (labelIds.length > 0 && createdTask.id) {
       try {
-        // Try to update labels
-        const updateResult = await client.tasks.updateTaskLabels(createdTask.id, {
-          label_ids: labelIds,
-        });
+        await syncTaskLabelsToTarget(client, createdTask.id, labelIds);
 
-        // Verify the labels were actually assigned (API tokens may silently fail)
         const labelsActuallyAssigned = await this.verifyLabelAssignment(client, createdTask.id, labelIds);
 
         if (!labelsActuallyAssigned) {
-          // Label assignment silently failed (common with API tokens)
-          logger.warn('Label assignment may have failed silently', {
+          logger.warn('Label assignment did not verify after per-label sync', {
             taskId: createdTask.id,
             labelIds,
             labelNames: task.labels,
-            updateResult,
           });
-          warnings.push(`Labels specified but not assigned (API token limitation). Consider using JWT authentication for label support.`);
+          warnings.push(
+            'Labels were requested but could not be confirmed on the task after assignment. Check that label IDs exist and belong to the project.',
+          );
         } else {
           logger.debug('Labels assigned and verified successfully', {
             taskId: createdTask.id,
@@ -345,7 +342,7 @@ export class TaskCreationService {
         labelNames,
         error: labelError instanceof Error ? labelError.message : (labelError?.message ?? 'Unknown error'),
       });
-      return `Label assignment requires JWT authentication. Labels were not assigned.`;
+      return `Label assignment failed due to authentication. Labels were not assigned.`;
     } else {
       logger.error('Failed to assign labels to task', {
         taskId,

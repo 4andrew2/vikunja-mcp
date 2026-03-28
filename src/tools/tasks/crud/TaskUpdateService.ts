@@ -15,6 +15,12 @@ import { isAuthenticationError } from '../../../utils/auth-error-handler';
 import { RETRY_CONFIG } from '../../../utils/retry';
 import { transformApiError, handleFetchError, handleStatusCodeError } from '../../../utils/error-handler';
 import { AUTH_ERROR_MESSAGES } from '../constants';
+import {
+  mergeLabelIdsForUpdate,
+  stripTaskRelationFieldsForUpdate,
+  syncTaskLabelsToTarget,
+  verifyTaskLabelAssignment,
+} from '../label-assignment';
 import { createTaskResponse } from './TaskResponseFormatter';
 import { formatAorpAsMarkdown } from '../../../utils/response-factory';
 
@@ -70,13 +76,23 @@ export async function updateTask(args: UpdateTaskArgs): Promise<{ content: Array
     const updateState = await analyzeUpdateState(client, args.id, args);
 
     // Build and apply the update (bucketId handled above via dedicated endpoint; not sent in task update)
-    const { bucketId: _b, ...argsForUpdate } = args;
+    const { bucketId, ...argsForUpdate } = args;
+    void bucketId;
     const updateData = buildUpdateData(updateState.currentTask, argsForUpdate);
     await client.tasks.updateTask(args.id, updateData);
 
-    // Update labels if provided
+    // Update labels if provided ([] clears all; non-empty merges with existing task labels).
+    // Merge against task state *after* scalar update so we do not rely on stale GET from analyzeUpdateState
+    // (some instances may change label-related state when PUT runs).
     if (args.labels !== undefined) {
-      await updateTaskLabels(client, args.id, args.labels);
+      const taskForLabelMerge = await client.tasks.getTask(args.id);
+      const labelIdsToSet =
+        args.labels.length === 0 ? [] : mergeLabelIdsForUpdate(taskForLabelMerge, args.labels);
+      await updateTaskLabels(client, args.id, labelIdsToSet);
+      const labelsOk = await verifyTaskLabelAssignment(client, args.id, labelIdsToSet);
+      if (!labelsOk) {
+        throw new MCPError(ErrorCode.API_ERROR, AUTH_ERROR_MESSAGES.LABEL_VERIFY_FAILED);
+      }
     }
 
     // Update assignees if provided
@@ -179,7 +195,7 @@ async function analyzeUpdateState(client: VikunjaClient, taskId: number, args: U
  */
 function buildUpdateData(currentTask: Task, args: UpdateTaskArgs): Task {
   const updateData: Task = {
-    ...currentTask,
+    ...stripTaskRelationFieldsForUpdate(currentTask),
     // Override with any provided updates
     ...(args.title !== undefined && { title: args.title }),
     ...(args.description !== undefined && { description: args.description }),
@@ -236,11 +252,8 @@ async function moveTaskToBucket(client: VikunjaClient, taskId: number, bucketId:
  */
 async function updateTaskLabels(client: VikunjaClient, taskId: number, labelIds: number[]): Promise<void> {
   try {
-    await client.tasks.updateTaskLabels(taskId, {
-      label_ids: labelIds,
-    });
+    await syncTaskLabelsToTarget(client, taskId, labelIds);
   } catch (labelError) {
-    // Check if it's an auth error
     if (isAuthenticationError(labelError)) {
       throw new MCPError(ErrorCode.API_ERROR, AUTH_ERROR_MESSAGES.LABEL_UPDATE);
     }

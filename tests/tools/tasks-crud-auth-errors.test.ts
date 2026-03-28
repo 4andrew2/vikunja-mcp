@@ -74,7 +74,8 @@ describe('Tasks CRUD - Authentication Error Handling', () => {
         getTask: jest.fn(),
         updateTask: jest.fn(),
         deleteTask: jest.fn(),
-        updateTaskLabels: jest.fn(),
+        addLabelToTask: jest.fn(),
+        removeLabelFromTask: jest.fn(),
         bulkAssignUsersToTask: jest.fn(),
         removeUserFromTask: jest.fn(),
       },
@@ -88,10 +89,11 @@ describe('Tasks CRUD - Authentication Error Handling', () => {
       // Mock successful task creation
       const createdTask = { id: 1, title: 'Test Task', project_id: 1 };
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      
+      mockClient.tasks.getTask.mockResolvedValue({ ...createdTask, labels: [] });
+
       // Mock label assignment failure with 401 auth error
       const authError = createAuthError(401, 'Unauthorized to assign labels');
-      mockClient.tasks.updateTaskLabels.mockRejectedValue(authError);
+      mockClient.tasks.addLabelToTask.mockRejectedValue(authError);
       
       // Mock successful task deletion for rollback
       mockClient.tasks.deleteTask.mockResolvedValue(undefined);
@@ -125,10 +127,11 @@ describe('Tasks CRUD - Authentication Error Handling', () => {
       // Mock successful task creation
       const createdTask = { id: 1, title: 'Test Task', project_id: 1 };
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      
+      mockClient.tasks.getTask.mockResolvedValue({ ...createdTask, labels: [] });
+
       // Mock label assignment failure with 403 Axios-style auth error
       const authError = createAxiosAuthError(403, 'Forbidden to assign labels');
-      mockClient.tasks.updateTaskLabels.mockRejectedValue(authError);
+      mockClient.tasks.addLabelToTask.mockRejectedValue(authError);
       
       // Mock successful task deletion for rollback
       mockClient.tasks.deleteTask.mockResolvedValue(undefined);
@@ -149,8 +152,9 @@ describe('Tasks CRUD - Authentication Error Handling', () => {
       // Mock successful task creation and label assignment
       const createdTask = { id: 1, title: 'Test Task', project_id: 1 };
       mockClient.tasks.createTask.mockResolvedValue(createdTask);
-      mockClient.tasks.updateTaskLabels.mockResolvedValue(undefined);
-      
+      mockClient.tasks.getTask.mockResolvedValue({ ...createdTask, labels: [] });
+      mockClient.tasks.addLabelToTask.mockResolvedValue(undefined);
+
       // Mock assignee assignment failure with 401 auth error
       const authError = createAuthError(401, 'Unauthorized to assign users');
       mockClient.tasks.bulkAssignUsersToTask.mockRejectedValue(authError);
@@ -230,7 +234,7 @@ describe('Tasks CRUD - Authentication Error Handling', () => {
       
       // Mock label update failure with 401 auth error
       const authError = createAuthError(401, 'Unauthorized to update labels');
-      mockClient.tasks.updateTaskLabels.mockRejectedValue(authError);
+      mockClient.tasks.addLabelToTask.mockRejectedValue(authError);
 
       await expect(
         updateTask({
@@ -260,7 +264,7 @@ describe('Tasks CRUD - Authentication Error Handling', () => {
       
       // Mock label update failure with 403 Axios-style auth error
       const authError = createAxiosAuthError(403, 'Forbidden to update labels');
-      mockClient.tasks.updateTaskLabels.mockRejectedValue(authError);
+      mockClient.tasks.addLabelToTask.mockRejectedValue(authError);
 
       await expect(
         updateTask({
@@ -396,7 +400,8 @@ describe('Tasks CRUD - Authentication Error Handling', () => {
       
       // Mock label assignment failure with non-auth error
       const nonAuthError = new Error('Network timeout');
-      mockClient.tasks.updateTaskLabels.mockRejectedValue(nonAuthError);
+      mockClient.tasks.getTask.mockResolvedValue({ ...createdTask, labels: [] });
+      mockClient.tasks.addLabelToTask.mockRejectedValue(nonAuthError);
       
       // Mock successful task deletion for rollback
       mockClient.tasks.deleteTask.mockResolvedValue(undefined);
@@ -429,7 +434,7 @@ describe('Tasks CRUD - Authentication Error Handling', () => {
       
       // Mock label update failure with non-auth error
       const nonAuthError = new Error('Database connection failed');
-      mockClient.tasks.updateTaskLabels.mockRejectedValue(nonAuthError);
+      mockClient.tasks.addLabelToTask.mockRejectedValue(nonAuthError);
 
       await expect(
         updateTask({
@@ -454,7 +459,7 @@ describe('Tasks CRUD - Authentication Error Handling', () => {
       });
 
       // Verify no label operations were attempted due to missing task ID
-      expect(mockClient.tasks.updateTaskLabels).not.toHaveBeenCalled();
+      expect(mockClient.tasks.addLabelToTask).not.toHaveBeenCalled();
       // Verify no deleteTask call was made since there's no ID
       expect(mockClient.tasks.deleteTask).not.toHaveBeenCalled();
 

@@ -11,6 +11,7 @@ import { convertRepeatConfiguration } from '../validation';
 import { REPEAT_MODE_MAP } from '../constants';
 
 import { formatAorpAsMarkdown } from '../../../utils/response-factory';
+import { syncTaskLabelsToTarget } from '../label-assignment';
 /**
  * Main processor for all bulk operations
  */
@@ -459,16 +460,7 @@ export const BulkOperationProcessor = {
   ): Promise<void> {
     // Add labels and assignees if provided
     if (taskData.labels && taskData.labels.length > 0) {
-      await withRetry(
-        () => client.tasks.updateTaskLabels(taskId, {
-          label_ids: taskData.labels || [],
-        }),
-        {
-          maxRetries: RETRY_CONFIG.AUTH_ERRORS.maxRetries,
-          timeout: RETRY_CONFIG.AUTH_ERRORS.initialDelay + RETRY_CONFIG.AUTH_ERRORS.maxDelay,
-          shouldRetry: (error: unknown) => isAuthenticationError(error)
-        }
-      );
+      await syncTaskLabelsToTarget(client, taskId, taskData.labels || []);
     }
 
     if (taskData.assignees && taskData.assignees.length > 0) {

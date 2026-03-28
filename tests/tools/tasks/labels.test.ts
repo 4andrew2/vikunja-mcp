@@ -1,6 +1,6 @@
 import { applyLabels, removeLabels, listTaskLabels } from '../../../src/tools/tasks/labels';
 import { getClientFromContext } from '../../../src/client';
-import { MCPError, ErrorCode } from '../../../src/types/index';
+import { MCPError } from '../../../src/types/index';
 
 // Mock the client
 jest.mock('../../../src/client');
@@ -22,9 +22,10 @@ describe('Label operations', () => {
   };
 
   beforeEach(() => {
-    // Use resetAllMocks to also reset mock implementations (not just call history)
     jest.resetAllMocks();
     mockGetClientFromContext.mockResolvedValue(mockClient as any);
+    mockClient.tasks.addLabelToTask.mockResolvedValue({ task_id: 1, label_id: 1 } as any);
+    mockClient.tasks.removeLabelFromTask.mockResolvedValue({} as any);
   });
 
   describe('applyLabels', () => {
@@ -35,8 +36,11 @@ describe('Label operations', () => {
         labels: [{ id: 1, title: 'research', hex_color: '3498db' }],
       };
 
-      mockClient.tasks.addLabelToTask.mockResolvedValue({});
-      mockClient.tasks.getTask.mockResolvedValue(mockTask);
+      mockClient.tasks.getTask
+        .mockResolvedValueOnce({ id: 1, title: 'Test Task', labels: [] })
+        .mockResolvedValueOnce({ id: 1, title: 'Test Task', labels: [] })
+        .mockResolvedValueOnce(mockTask)
+        .mockResolvedValueOnce(mockTask);
 
       const result = await applyLabels({ id: 1, labels: [1] });
 
@@ -50,6 +54,9 @@ describe('Label operations', () => {
 
     it('should throw error if task id is missing', async () => {
       await expect(applyLabels({ labels: [1] })).rejects.toThrow(MCPError);
+      await expect(applyLabels({ labels: [1] })).rejects.toThrow(
+        'Task id is required for apply-label operation',
+      );
     });
 
     it('should throw error if labels array is empty', async () => {
@@ -57,18 +64,72 @@ describe('Label operations', () => {
     });
 
     it('should handle multiple labels', async () => {
-      const mockTask = { id: 1, title: 'Test Task', labels: [] };
-      mockClient.tasks.addLabelToTask.mockResolvedValue({});
-      mockClient.tasks.getTask.mockResolvedValue(mockTask);
+      const mockTask = {
+        id: 1,
+        title: 'Test Task',
+        labels: [
+          { id: 1, title: 'a' },
+          { id: 2, title: 'b' },
+        ],
+      };
+      mockClient.tasks.getTask
+        .mockResolvedValueOnce({ id: 1, title: 'Test Task', labels: [] })
+        .mockResolvedValueOnce({ id: 1, title: 'Test Task', labels: [] })
+        .mockResolvedValueOnce(mockTask)
+        .mockResolvedValueOnce(mockTask);
 
       const result = await applyLabels({ id: 1, labels: [1, 2] });
 
       expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledTimes(2);
+      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(1, { task_id: 1, label_id: 1 });
+      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(1, { task_id: 1, label_id: 2 });
       expect(result.content[0].text).toContain('Labels applied to task successfully');
     });
 
+    it('should merge with existing labels on the task', async () => {
+      const afterApply = {
+        id: 1,
+        title: 'Test Task',
+        labels: [
+          { id: 3, title: 'existing' },
+          { id: 1, title: 'new' },
+        ],
+      };
+      mockClient.tasks.getTask
+        .mockResolvedValueOnce({
+          id: 1,
+          title: 'Test Task',
+          labels: [{ id: 3, title: 'existing' }],
+        })
+        .mockResolvedValueOnce({
+          id: 1,
+          title: 'Test Task',
+          labels: [{ id: 3, title: 'existing' }],
+        })
+        .mockResolvedValueOnce(afterApply)
+        .mockResolvedValueOnce(afterApply);
+
+      await applyLabels({ id: 1, labels: [1] });
+
+      expect(mockClient.tasks.addLabelToTask).toHaveBeenCalledWith(1, {
+        task_id: 1,
+        label_id: 1,
+      });
+    });
+
     it('should handle API errors gracefully', async () => {
+      mockClient.tasks.getTask.mockResolvedValue({ id: 1, title: 'T', labels: [] });
       mockClient.tasks.addLabelToTask.mockRejectedValue(new Error('API Error'));
+
+      await expect(applyLabels({ id: 1, labels: [1] })).rejects.toThrow(MCPError);
+    });
+
+    it('should throw when verification fails after successful API call', async () => {
+      mockClient.tasks.getTask
+        .mockResolvedValueOnce({ id: 1, title: 'Test Task', labels: [] })
+        .mockResolvedValueOnce({ id: 1, title: 'Test Task', labels: [] })
+        .mockResolvedValueOnce({ id: 1, title: 'Test Task', labels: [] });
+      mockClient.tasks.addLabelToTask.mockResolvedValue({ task_id: 1, label_id: 1 } as any);
 
       await expect(applyLabels({ id: 1, labels: [1] })).rejects.toThrow(MCPError);
     });
@@ -76,9 +137,20 @@ describe('Label operations', () => {
 
   describe('removeLabels', () => {
     it('should remove labels from a task successfully', async () => {
-      const mockTask = { id: 1, title: 'Test Task', labels: null };
-      mockClient.tasks.removeLabelFromTask.mockResolvedValue({});
-      mockClient.tasks.getTask.mockResolvedValue(mockTask);
+      const mockTask = { id: 1, title: 'Test Task', labels: [] };
+      mockClient.tasks.getTask
+        .mockResolvedValueOnce({
+          id: 1,
+          title: 'Test Task',
+          labels: [{ id: 1, title: 'x' }],
+        })
+        .mockResolvedValueOnce({
+          id: 1,
+          title: 'Test Task',
+          labels: [{ id: 1, title: 'x' }],
+        })
+        .mockResolvedValueOnce(mockTask)
+        .mockResolvedValueOnce(mockTask);
 
       const result = await removeLabels({ id: 1, labels: [1] });
 
@@ -95,13 +167,37 @@ describe('Label operations', () => {
     });
 
     it('should handle multiple labels removal', async () => {
-      const mockTask = { id: 1, title: 'Test Task', labels: null };
-      mockClient.tasks.removeLabelFromTask.mockResolvedValue({});
-      mockClient.tasks.getTask.mockResolvedValue(mockTask);
+      const afterRemove = {
+        id: 1,
+        title: 'Test Task',
+        labels: [{ id: 3, title: 'c' }],
+      };
+      mockClient.tasks.getTask
+        .mockResolvedValueOnce({
+          id: 1,
+          title: 'Test Task',
+          labels: [
+            { id: 1, title: 'a' },
+            { id: 2, title: 'b' },
+            { id: 3, title: 'c' },
+          ],
+        })
+        .mockResolvedValueOnce({
+          id: 1,
+          title: 'Test Task',
+          labels: [
+            { id: 1, title: 'a' },
+            { id: 2, title: 'b' },
+            { id: 3, title: 'c' },
+          ],
+        })
+        .mockResolvedValueOnce(afterRemove)
+        .mockResolvedValueOnce(afterRemove);
 
       const result = await removeLabels({ id: 1, labels: [1, 2] });
 
-      expect(mockClient.tasks.removeLabelFromTask).toHaveBeenCalledTimes(2);
+      expect(mockClient.tasks.removeLabelFromTask).toHaveBeenCalledWith(1, 1);
+      expect(mockClient.tasks.removeLabelFromTask).toHaveBeenCalledWith(1, 2);
       expect(result.content[0].text).toContain('Labels removed from task successfully');
     });
   });
