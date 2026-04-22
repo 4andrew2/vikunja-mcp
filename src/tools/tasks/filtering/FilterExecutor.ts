@@ -192,6 +192,17 @@ export const FilterExecutor = {
     if (args.search !== undefined) params.s = args.search;
     if (args.sort !== undefined) params.sort_by = args.sort;
 
+    // Include done filter in API params for server-side filtering
+    if (args.done !== undefined) {
+      const doneFilter = `done = ${args.done}`;
+      // Append to existing filter or set as new filter
+      if (params.filter) {
+        params.filter = `${params.filter} && ${doneFilter}`;
+      } else {
+        params.filter = doneFilter;
+      }
+    }
+
     // Memory protection: Check if we should implement pagination limits
     // Note: Vikunja API doesn't provide task count endpoints, so we use conservative defaults
     // and rely on user-provided pagination parameters

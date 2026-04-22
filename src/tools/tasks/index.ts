@@ -173,8 +173,8 @@ export function registerTasksTool(
       sort: z.string().optional(),
       search: z.string().optional(),
       // List specific filters
-      allProjects: z.boolean().optional(),
-      done: z.boolean().optional(),
+      allProjects: z.boolean().optional().describe('List tasks across all projects'),
+      done: z.boolean().optional().describe('Filter by completion status: true = completed tasks only, false = open tasks only, omit = all tasks'),
       // Comment fields
       comment: z.string().optional(),
       commentId: z.number().optional(),
