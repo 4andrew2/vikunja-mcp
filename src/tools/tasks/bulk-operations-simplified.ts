@@ -28,6 +28,7 @@ const processors = {
 
 // Re-use validation logic from BulkOperationValidator to eliminate duplication
 const validateBulkUpdate = (args: BulkUpdateArgs): void => {
+  bulkOperationValidator.normalizeFieldName(args);
   bulkOperationValidator.validateBulkUpdate(args);
   bulkOperationValidator.preprocessFieldValue(args);
   bulkOperationValidator.validateFieldConstraints(args);

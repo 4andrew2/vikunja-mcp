@@ -131,6 +131,32 @@ describe('Bulk operations', () => {
       });
     });
 
+    describe('Field name normalization', () => {
+      it('should accept camelCase bucketId and normalize to bucket_id', async () => {
+        mockClient.tasks.getTask.mockResolvedValue({ id: 1, project_id: 1, title: 'Test', bucket_id: 1 });
+        mockClient.tasks.updateTask.mockResolvedValue({ id: 1, project_id: 1, title: 'Test', bucket_id: 5 });
+
+        const result = await bulkUpdateTasks({ taskIds: [1], field: 'bucketId', value: 5 });
+        expect(result.content[0].text).toContain('Success');
+      });
+
+      it('should accept camelCase dueDate and normalize to due_date', async () => {
+        mockClient.tasks.getTask.mockResolvedValue({ id: 1, project_id: 1, title: 'Test' });
+        mockClient.tasks.updateTask.mockResolvedValue({ id: 1, project_id: 1, title: 'Test', due_date: '2025-12-01T00:00:00Z' });
+
+        const result = await bulkUpdateTasks({ taskIds: [1], field: 'dueDate', value: '2025-12-01T00:00:00Z' });
+        expect(result.content[0].text).toContain('Success');
+      });
+
+      it('should still accept snake_case bucket_id', async () => {
+        mockClient.tasks.getTask.mockResolvedValue({ id: 1, project_id: 1, title: 'Test', bucket_id: 1 });
+        mockClient.tasks.updateTask.mockResolvedValue({ id: 1, project_id: 1, title: 'Test', bucket_id: 5 });
+
+        const result = await bulkUpdateTasks({ taskIds: [1], field: 'bucket_id', value: 5 });
+        expect(result.content[0].text).toContain('Success');
+      });
+    });
+
     describe('Type coercion', () => {
       it('should convert string "true" to boolean for done field', async () => {
         const mockTasks = [{ id: 1, done: true }, { id: 2, done: true }];
