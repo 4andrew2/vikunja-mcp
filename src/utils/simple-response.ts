@@ -125,13 +125,13 @@ export function formatSuccessMessage(
 
     if (collection && Array.isArray(collection)) {
       content += `**Results:** ${collection.length} item(s)\n\n`;
-      if (collection.length > 0 && collection.length <= 10) {
-        content += formatDataItems(collection as DataItem[]);
+      if (collection.length > 0) {
+        content += formatDataItems(collection as DataItem[], collection.length > 10);
       }
     } else if (Array.isArray(data)) {
       content += `**Results:** ${data.length} item(s)\n\n`;
-      if (data.length > 0 && data.length <= 10) {
-        content += formatDataItems(data as DataItem[]);
+      if (data.length > 0) {
+        content += formatDataItems(data as DataItem[], data.length > 10);
       }
     } else if (data && typeof data === 'object') {
       content += formatObjectData(data as Record<string, unknown>);
@@ -219,6 +219,11 @@ function formatTaskItem(task: Task, index: number): string {
     parts.push(`- **Project:** ${task.project_id}`);
   }
 
+  // Bucket ID (if set)
+  if (task.bucket_id) {
+    parts.push(`- **Bucket:** ${task.bucket_id}`);
+  }
+
   // Labels (if any)
   if (task.labels && task.labels.length > 0) {
     const labelTitles = task.labels.map(l => l.title).join(', ');
@@ -243,16 +248,49 @@ function formatTaskItem(task: Task, index: number): string {
 }
 
 /**
- * Format array data items
+ * Format a single Task as a compact one-liner for large lists
  */
-function formatDataItems(items: DataItem[]): string {
+function formatTaskCompact(task: Task, index: number): string {
+  const status = task.done ? '✅' : '❌';
+  const priority = task.priority && task.priority > 0 ? ` P${task.priority}` : '';
+  const labels = task.labels && task.labels.length > 0
+    ? ` [${task.labels.map(l => l.title).join(', ')}]`
+    : '';
+  const bucket = task.bucket_id ? ` bucket:${task.bucket_id}` : '';
+  const due = task.due_date ? ` due:${task.due_date}` : '';
+  const desc = task.description
+    ? ` — ${task.description.length > 100 ? task.description.slice(0, 100) + '…' : task.description}`
+    : '';
+  return `${index + 1}. ${status} **${task.title}** (ID: ${task.id})${priority}${labels}${bucket}${due}${desc}`;
+}
+
+/**
+ * Format a Label item with hex_color
+ */
+function formatLabelItem(label: Label, index: number): string {
+  const color = label.hex_color ? ` [${label.hex_color}]` : '';
+  const desc = label.description ? ` — ${label.description}` : '';
+  return `${index + 1}. **${label.title}** (ID: ${label.id})${color}${desc}`;
+}
+
+/**
+ * Format array data items
+ * @param compact - Use compact one-line format for large lists
+ */
+function formatDataItems(items: DataItem[], compact: boolean = false): string {
   return items.map((item, index) => {
     if (typeof item === 'object' && item !== null) {
+      // Check if this is a Label object
+      const label = item as unknown as Label;
+      if (label.title && label.hex_color !== undefined) {
+        return formatLabelItem(label, index);
+      }
+
       // Check if this is a Task object with rich data
       const task = item as unknown as Task;
       if (task.title && (task.description || task.priority !== undefined ||
           task.due_date || task.labels || task.assignees || task.done !== undefined)) {
-        return formatTaskItem(task, index);
+        return compact ? formatTaskCompact(task, index) : formatTaskItem(task, index);
       }
 
       // Fallback to simple formatting for other object types

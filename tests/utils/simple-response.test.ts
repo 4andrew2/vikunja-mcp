@@ -4,7 +4,7 @@
  */
 
 import { formatSuccessMessage, createSuccessResponse, createErrorResponse } from '../../src/utils/simple-response';
-import type { Task } from '../../src/types/vikunja';
+import type { Task, Label } from '../../src/types/vikunja';
 
 describe('simple-response - Task Formatting', () => {
   describe('formatSuccessMessage with tasks', () => {
@@ -270,10 +270,10 @@ describe('simple-response - Task Formatting', () => {
       expect(result).toContain('2. **Project Beta** (ID: 2)');
     });
 
-    it('should format label items', () => {
-      const labels = [
+    it('should format label items with hex_color', () => {
+      const labels: Label[] = [
         { id: 1, title: 'urgent', hex_color: '#ff0000' },
-        { id: 2, title: 'bug', hex_color: '#ff6600' }
+        { id: 2, title: 'bug', hex_color: '#ff6600', description: 'Software defect' }
       ];
 
       const result = formatSuccessMessage(
@@ -283,8 +283,8 @@ describe('simple-response - Task Formatting', () => {
         { count: 2 }
       );
 
-      expect(result).toContain('1. **urgent** (ID: 1)');
-      expect(result).toContain('2. **bug** (ID: 2)');
+      expect(result).toContain('1. **urgent** (ID: 1) [#ff0000]');
+      expect(result).toContain('2. **bug** (ID: 2) [#ff6600] — Software defect');
     });
   });
 
@@ -346,12 +346,13 @@ describe('simple-response - Task Formatting', () => {
       expect(result).toContain('0 item(s)');
     });
 
-    it('should handle more than 10 items (should not display)', () => {
+    it('should display all items in compact format when > 10', () => {
       const tasks: Task[] = Array.from({ length: 15 }, (_, i) => ({
         id: i + 1,
         project_id: 1,
         title: `Task ${i + 1}`,
-        done: false,
+        done: i % 2 === 0,
+        priority: i % 3,
         repeat_after: 0
       }));
 
@@ -364,12 +365,39 @@ describe('simple-response - Task Formatting', () => {
 
       expect(result).toContain('**Results:**');
       expect(result).toContain('15 item(s)');
-      // Items should not be displayed when > 10
+      // Items should be displayed in compact format (no ### headers)
+      expect(result).toContain('**Task 1**');
+      expect(result).toContain('**Task 15**');
       expect(result).not.toContain('### 1.');
-      expect(result).not.toContain('Task 1');
+      // Compact format includes status emoji
+      expect(result).toContain('✅');
+      expect(result).toContain('❌');
     });
 
-    it('should handle exactly 10 items (should display)', () => {
+    it('should truncate description in compact format', () => {
+      const longDesc = 'A'.repeat(200);
+      const tasks: Task[] = Array.from({ length: 12 }, (_, i) => ({
+        id: i + 1,
+        project_id: 1,
+        title: `Task ${i + 1}`,
+        description: i === 0 ? longDesc : undefined,
+        done: false,
+        repeat_after: 0
+      }));
+
+      const result = formatSuccessMessage(
+        'list-tasks',
+        'Found 12 tasks',
+        { tasks },
+        { count: 12 }
+      );
+
+      // Description should be truncated to 100 chars with ellipsis
+      expect(result).toContain('A'.repeat(100) + '…');
+      expect(result).not.toContain('A'.repeat(200));
+    });
+
+    it('should handle exactly 10 items with rich format', () => {
       const tasks: Task[] = Array.from({ length: 10 }, (_, i) => ({
         id: i + 1,
         project_id: 1,
@@ -387,11 +415,71 @@ describe('simple-response - Task Formatting', () => {
 
       expect(result).toContain('**Results:**');
       expect(result).toContain('10 item(s)');
-      // Items should be displayed when <= 10
+      // Items should be displayed in rich format when <= 10
       expect(result).toContain('### 1.');
       expect(result).toContain('Task 1');
       expect(result).toContain('### 10.');
       expect(result).toContain('Task 10');
+    });
+
+    it('should show bucket_id in rich task format', () => {
+      const task: Task = {
+        id: 1,
+        project_id: 5,
+        title: 'Kanban task',
+        done: false,
+        bucket_id: 42,
+        repeat_after: 0
+      };
+
+      const result = formatSuccessMessage(
+        'get-task',
+        'Task retrieved',
+        { tasks: [task] },
+        { count: 1 }
+      );
+
+      expect(result).toContain('**Bucket:** 42');
+    });
+
+    it('should show bucket_id in compact task format', () => {
+      const tasks: Task[] = Array.from({ length: 12 }, (_, i) => ({
+        id: i + 1,
+        project_id: 1,
+        title: `Task ${i + 1}`,
+        done: false,
+        bucket_id: 7,
+        repeat_after: 0
+      }));
+
+      const result = formatSuccessMessage(
+        'list-tasks',
+        'Found 12 tasks',
+        { tasks },
+        { count: 12 }
+      );
+
+      expect(result).toContain('bucket:7');
+    });
+
+    it('should format many labels with hex_color', () => {
+      const labels: Label[] = Array.from({ length: 18 }, (_, i) => ({
+        id: i + 1,
+        title: `Label ${i + 1}`,
+        hex_color: `#${String(i).padStart(6, '0')}`
+      }));
+
+      const result = formatSuccessMessage(
+        'list-labels',
+        'Found 18 labels',
+        { labels },
+        { count: 18 }
+      );
+
+      expect(result).toContain('18 item(s)');
+      expect(result).toContain('**Label 1** (ID: 1)');
+      expect(result).toContain('**Label 18** (ID: 18)');
+      expect(result).toContain('[#000000]');
     });
   });
 });
