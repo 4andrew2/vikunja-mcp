@@ -69,7 +69,8 @@ export const bulkOperationValidator = {
    * Normalize camelCase field names to snake_case for consistency
    */
   normalizeFieldName(args: BulkUpdateArgs): void {
-    if (!args.field) return;
+    const field = args.field;
+    if (!field) return;
     const camelToSnake: Record<string, string> = {
       bucketId: 'bucket_id',
       projectId: 'project_id',
@@ -77,8 +78,9 @@ export const bulkOperationValidator = {
       repeatAfter: 'repeat_after',
       repeatMode: 'repeat_mode',
     };
-    if (camelToSnake[args.field]) {
-      args.field = camelToSnake[args.field];
+    const normalized = camelToSnake[field];
+    if (normalized) {
+      args.field = normalized;
     }
   },
 

@@ -28,7 +28,8 @@ export type FilterField =
   | 'created'
   | 'updated'
   | 'title'
-  | 'description';
+  | 'description'
+  | 'bucketId';
 
 /**
  * Valid field types for validation
@@ -44,6 +45,7 @@ export const FIELD_TYPES: Record<FilterField, 'boolean' | 'number' | 'date' | 's
   updated: 'date',
   title: 'string',
   description: 'string',
+  bucketId: 'number',
 };
 
 /**

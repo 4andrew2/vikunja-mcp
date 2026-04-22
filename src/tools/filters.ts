@@ -85,6 +85,7 @@ const BuildFilterSchema = z.object({
           'updated',
           'title',
           'description',
+          'bucketId',
         ] as const),
         operator: z.enum(['=', '!=', '>', '>=', '<', '<=', 'like', 'in', 'not in'] as const),
         value: z.union([

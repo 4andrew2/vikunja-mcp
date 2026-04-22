@@ -269,7 +269,8 @@ function parseOperator(state: ParseState): FilterOperator | null {
  */
 function parseField(state: ParseState): FilterField | null {
   const fields: FilterField[] = ['done', 'priority', 'percentDone', 'dueDate', 'assignees',
-                                 'labels', 'created', 'updated', 'title', 'description'];
+                                 'labels', 'created', 'updated', 'title', 'description',
+                                 'bucketId'];
 
   for (const field of fields) {
     const substr = state.input.substring(state.position, state.position + field.length);
@@ -350,6 +351,7 @@ function convertValue(value: string, field: FilterField, operator: FilterOperato
     updated: 'date',
     title: 'string',
     description: 'string',
+    bucketId: 'number',
   }[field];
 
   if (fieldType === 'boolean') {
@@ -637,6 +639,7 @@ function validateFieldTypeAndValue(field: FilterField, operator: FilterOperator,
     updated: 'date',
     title: 'string',
     description: 'string',
+    bucketId: 'number',
   }[field];
 
   // Basic field validation

@@ -56,6 +56,9 @@ export function evaluateCondition(task: Task, condition: FilterCondition): boole
         Array.isArray(value) ? value.map((v) => Number(v)) : [Number(value)],
       );
 
+    case 'bucketId':
+      return evaluateComparison((task as unknown as { bucket_id?: number }).bucket_id || 0, operator, Number(value));
+
     default:
       return false;
   }

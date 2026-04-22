@@ -127,6 +127,7 @@ export interface Task {
   repeat_mode?: 'day' | 'week' | 'month' | 'year';
   priority?: number;
   percent_done?: number;
+  bucket_id?: number;
   labels?: Label[];
   assignees?: User[];
   attachments?: Attachment[];
