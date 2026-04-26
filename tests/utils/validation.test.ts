@@ -29,17 +29,13 @@ describe('Security Validation Utilities', () => {
       expect(result).toBe('This is a valid string');
     });
 
-    it('should escape HTML special characters (when not XSS)', () => {
-      const testCases = [
-        { input: 'Hello <world>', expected: 'Hello &lt;world&gt;' },
-        { input: 'Test "quoted" string', expected: 'Test &quot;quoted&quot; string' },
-        { input: "Test 'single' quotes", expected: 'Test &#x27;single&#x27; quotes' },
-        { input: 'path/to/file', expected: 'path&#x2F;to&#x2F;file' }
-      ];
-
-      testCases.forEach(({ input, expected }) => {
-        expect(sanitizeString(input)).toBe(expected);
-      });
+    it('should pass through strings with special characters', () => {
+      // No HTML escaping or pattern rejection — pass-through only
+      expect(sanitizeString('Hello <world>')).toBe('Hello <world>');
+      expect(sanitizeString('path/to/file')).toBe('path/to/file');
+      expect(sanitizeString('Task #137 -- blocked')).toBe('Task #137 -- blocked');
+      expect(sanitizeString('Run curl to test')).toBe('Run curl to test');
+      expect(sanitizeString('CREATE TABLE users')).toBe('CREATE TABLE users');
     });
 
     it('should throw error for non-string values', () => {
@@ -55,60 +51,6 @@ describe('Security Validation Utilities', () => {
       expect(() => sanitizeString(longString)).toThrow(
         new MCPError(ErrorCode.VALIDATION_ERROR, 'String value exceeds maximum length of 1000')
       );
-    });
-
-    it('should detect and block XSS patterns', () => {
-      const xssPatterns = [
-        '<script>',
-        '<SCRIPT>',
-        '<img src=x onerror=alert(1)>',
-        '<body onload=alert(1)>',
-        'javascript:alert(1)',
-        'JAVASCRIPT:alert(1)',
-        '<iframe>',
-        '<object>',
-        '<embed>',
-        '<link>',
-        '<meta>',
-        '<style>',
-        '<svg>',
-        '<!-- malicious script -->',
-        'expression(alert(1))',
-        'eval("malicious")',
-        'Function("malicious")',
-        '<div onmouseover="alert(1)">',
-        '<a href="javascript:alert(1)">',
-        'data:text/html,<script>alert(1)</script>',
-        'data:application/javascript,alert(1)'
-      ];
-
-      // Test that all patterns throw errors
-      xssPatterns.forEach((pattern, index) => {
-        expect(() => sanitizeString(pattern)).toThrow(MCPError);
-      });
-    });
-
-    it('should detect XSS in HTML-encoded content', () => {
-      const encodedXss = [
-        '&lt;script&gt;alert(1)&lt;&#x2F;script&gt;',
-        '&lt;img src=x onerror=alert(1)&gt;',
-        '&lt;iframe&gt;',
-        '&lt;svg&gt;'
-      ];
-
-      encodedXss.forEach(pattern => {
-        expect(() => sanitizeString(pattern)).toThrow(MCPError);
-        expect(() => sanitizeString(pattern)).toThrow('String contains potentially dangerous content');
-      });
-    });
-
-    it('should reset regex lastIndex for global patterns', () => {
-      // Test multiple XSS detections to ensure regex state is properly reset
-      const xssString = '<script>alert(1)</script>';
-
-      for (let i = 0; i < 5; i++) {
-        expect(() => sanitizeString(xssString)).toThrow();
-      }
     });
   });
 
@@ -255,9 +197,10 @@ describe('Security Validation Utilities', () => {
       expect(() => validateValue(new Date())).toThrow(MCPError);
     });
 
-    it('should sanitize strings in arrays', () => {
-      const arrayWithXss = ['<script>alert(1)</script>', 'normal string'];
-      expect(() => validateValue(arrayWithXss)).toThrow(MCPError);
+    it('should pass through strings in arrays without rejection', () => {
+      const arrayWithHtml = ['<script>alert(1)</script>', 'normal string'];
+      const result = validateValue(arrayWithHtml);
+      expect(result).toEqual(['<script>alert(1)</script>', 'normal string']);
     });
   });
 
@@ -712,31 +655,19 @@ describe('Security Validation Utilities', () => {
     });
   });
 
-  describe('XSS Protection', () => {
-    it('should reject dangerous content with StorageDataError', () => {
-      // Current security approach: reject dangerous content rather than sanitize
-      const dangerousInputs = [
+  describe('Content pass-through', () => {
+    it('should pass through all content without rejection', () => {
+      // Pattern-based rejection removed — Vikunja API handles its own sanitization
+      const inputs = [
         '<script>alert("xss")</script>',
         'javascript:alert("xss")',
-        '<img src=x onerror=alert("xss")>',
-        '<svg onload=alert("xss")>',
-        '<iframe src="evil.com"></iframe>',
+        '<b>Bold text</b><em>Emphasis</em>',
         'onload="alert(1)"'
       ];
 
-      dangerousInputs.forEach(input => {
-        expect(() => sanitizeString(input)).toThrow(MCPError);
+      inputs.forEach(input => {
+        expect(sanitizeString(input)).toBe(input);
       });
-    });
-
-    it('should escape safe HTML content', () => {
-      // Test that safe HTML tags are escaped rather than stripped
-      const safeInput = '<b>Bold text</b><em>Emphasis</em>';
-      const result = sanitizeString(safeInput);
-      // HTML entities should be escaped
-      expect(result).toContain('&lt;b&gt;');
-      expect(result).toContain('&lt;em&gt;');
-      expect(typeof result).toBe('string');
     });
   });
 });
